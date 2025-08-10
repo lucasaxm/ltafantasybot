@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import aiohttp
+import socket
 from telegram import Update, ChatMember, BotCommand, BotCommandScopeAllPrivateChats
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -251,12 +252,32 @@ def build_headers() -> Dict[str, str]:
     }
     if token:
         h["x-session-token"] = token
+    # Optional cookies for Cloudflare or app session if needed in some networks
+    cookie_parts: List[str] = []
+    cf = os.getenv("CF_CLEARANCE", "").strip()
+    if cf:
+        cookie_parts.append(f"cf_clearance={cf}")
+    lta_sess = (os.getenv("LTAFANTASY_SESSION", "").strip() or
+                os.getenv("LTAFANTASY_SESSION_COOKIE", "").strip())
+    if lta_sess:
+        cookie_parts.append(f"_lolfantasy_session={lta_sess}")
+    if cookie_parts:
+        h["cookie"] = "; ".join(cookie_parts)
     return h
 
 def make_session() -> aiohttp.ClientSession:
     timeout = aiohttp.ClientTimeout(total=25)
-    # set default headers on the session so redirects keep them
-    return aiohttp.ClientSession(timeout=timeout, headers=build_headers())
+    # Optionally force IPv4 to avoid stricter IPv6 paths on some hosts
+    connector = None
+    if (os.getenv("FORCE_IPV4", "").strip().lower() in ("1", "true", "yes")):
+        connector = aiohttp.TCPConnector(family=socket.AF_INET)
+    # Use environment proxies if provided (HTTPS_PROXY/HTTP_PROXY)
+    return aiohttp.ClientSession(
+        timeout=timeout,
+        headers=build_headers(),
+        connector=connector,
+        trust_env=True,
+    )
 
 async def fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, str] | None = None) -> Any:
     logger.debug(f"API request: {url}")

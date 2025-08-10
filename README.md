@@ -150,8 +150,13 @@ ltafantasybot/
 ## Troubleshooting
 
 ### Bot gets 403 errors:
-- Update your `X_SESSION_TOKEN` in `.env`
+- Update your `X_SESSION_TOKEN` in `.env` and try again
 - Use `/auth <new_token>` to update at runtime
+- Some VPS ranges get stricter Cloudflare checks. You can:
+   - Set `FORCE_IPV4=true` in `.env` to avoid IPv6 paths
+   - If your browser session passes but server doesn't, copy your Cloudflare clearance cookie into `.env`:
+      - `CF_CLEARANCE=<value>` and optionally `_lolfantasy_session` as `LTAFANTASY_SESSION=<value>`
+   - If you access through a corporate/egress proxy, set `HTTPS_PROXY`/`HTTP_PROXY` and the bot will use it
 
 ### Bot doesn't respond:
 - Check `ALLOWED_USER_ID` matches your Telegram ID
@@ -173,6 +178,7 @@ The bot uses:
 - `aiohttp` for async HTTP requests  
 - Environment variables for configuration
 - Async/await for concurrent API calls
+- Optional: Cloudflare mitigation via Bruno UA, IPv4-only connector, and cookie support
 
 ## License
 
