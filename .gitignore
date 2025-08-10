@@ -1,6 +1,9 @@
 # Environment variables with secrets
 .env
 
+# Bot data files
+group_settings.json
+
 # Python
 __pycache__/
 *.py[cod]

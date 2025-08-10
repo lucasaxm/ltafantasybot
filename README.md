@@ -1,14 +1,18 @@
 # LTA Fantasy Bot
 
-A Telegram bot that monitors LTA Fantasy league scores and provides real-time updates.
+A Telegram bot that monitors LTA Fantasy league scores and provides real-time updates in both private chats and groups.
 
 ## Features
 
-- 🏆 Get current league standings with `/scores <league_slug>`
-- 📱 Watch leagues for live updates with `/watch <league_slug>`
-- 🔄 Automatic polling for score changes
-- 🔐 User access control for security
+- 🏆 Get current league standings with `/scores`
+- 📱 Monitor leagues for live updates 
+- 👥 **Group Support** - Attach leagues to groups for live monitoring
+- 🔄 Automatic polling for score changes during events
+- 🔐 Access control (owner in private, admins in groups)
 - 🚀 Cloudflare bypass using optimized headers
+- 💾 Persistent group-league mappings
+- 🤐 **Silent Operation** - Only responds to its own valid commands
+- 📋 **Smart Command Menu** - Context-aware command suggestions when typing `/`
 
 ## Setup
 
@@ -47,6 +51,9 @@ X_SESSION_TOKEN=your_lta_fantasy_session_token
 
 # Optional: polling interval in seconds (default: 30)
 POLL_SECS=30
+
+# Optional: logging level (DEBUG, INFO, WARNING, ERROR - default: INFO)
+LOG_LEVEL=INFO
 ```
 
 ### 4. Getting LTA Fantasy Session Token
@@ -66,7 +73,7 @@ POLL_SECS=30
 python bot.py
 ```
 
-### Available Commands:
+### Private Chat Commands:
 
 - `/start` - Show help message
 - `/scores <league_slug>` - Get current standings for a league
@@ -74,19 +81,44 @@ python bot.py
 - `/unwatch` - Stop monitoring
 - `/auth <token>` - Update session token at runtime
 
-### Example:
+### Group Commands (Admin Only):
+
+- `/setleague <league_slug>` - Attach a league to this group
+- `/getleague` - Show the current attached league
+- `/startwatch` - Start monitoring the group's league
+- `/stopwatch` - Stop monitoring
+- `/scores` - Get current standings for the group's league
+
+### Example Usage:
+
+**In Private Chat:**
 ```
 /scores regata-exrzlize75
 /watch regata-exrzlize75
+```
+
+**In Group Chat (as admin):**
+```
+/setleague regata-exrzlize75
+/startwatch
+/scores
 ```
 
 ## How it Works
 
 1. **Cloudflare Bypass**: Uses `bruno-runtime/2.9.0` User-Agent to avoid bot detection
 2. **Session Management**: Maintains aiohttp sessions with proper headers
-3. **Live Updates**: Polls API every 30 seconds (configurable)
-4. **Smart Notifications**: Only sends updates when scores actually change
-5. **Error Handling**: Graceful handling of auth failures and API errors
+3. **Group Support**: Each group can be attached to one league with persistent storage
+4. **Smart Live Updates**: 
+   - Sends **one message** that gets **edited every 30 seconds** with live scores
+   - Shows ⬆️ **up arrows** when player scores increase
+   - Shows ⬇️ **down arrows** when player scores decrease  
+   - Includes 🕒 **timestamp** showing last update time
+   - Only sends **new messages** when team rankings actually change (🔄 "RANKING CHANGED!")
+5. **Minimal Spam**: Edits same message for score updates, new messages only for ranking changes
+6. **Access Control**: Private chat (owner only) and group chat (admins only)
+7. **Silent Operation**: Ignores unknown commands to coexist with other bots
+8. **Error Handling**: Graceful handling of auth failures and API errors
 
 ## API Endpoints Used
 
@@ -96,10 +128,24 @@ python bot.py
 
 ## Security
 
-- User access control (only specified Telegram user can use bot)
-- Private chat only (won't respond in groups)
-- Environment variables for sensitive data
-- No hardcoded credentials in code
+- **Private Chat**: Only specified Telegram user (ALLOWED_USER_ID) can use bot
+- **Group Chat**: Only group administrators can manage league settings and monitoring
+- **Data Persistence**: Group settings stored in local JSON file
+- **Environment Variables**: All sensitive data in .env file
+- **No Hardcoded Credentials**: All secrets externalized
+
+## File Structure
+
+```
+ltafantasybot/
+├── bot.py                 # Main bot code
+├── .env                   # Your secrets (gitignored)
+├── .env.example           # Template
+├── group_settings.json    # Group-league mappings (auto-created)
+├── requirements.txt       # Dependencies
+├── README.md             # This file
+└── .gitignore            # Git protection
+```
 
 ## Troubleshooting
 
@@ -114,6 +160,11 @@ python bot.py
 ### "Conflict" errors:
 - Only one bot instance can run at a time
 - Kill any existing processes before starting
+
+### Enable detailed logging:
+- Set `LOG_LEVEL=DEBUG` in `.env` to see API requests and detailed operation logs
+- Use `LOG_LEVEL=WARNING` to reduce log output
+- Default is `LOG_LEVEL=INFO` for normal operation
 
 ## Development
 
