@@ -153,6 +153,20 @@ def set_group_league(chat_id: int, league_slug: str):
 
 
 # ====== Access control ======
+async def is_group_member(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if user is a member of the group (for read-only commands)"""
+    if not update.effective_chat or not update.effective_user:
+        return False
+    
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    
+    try:
+        member = await context.bot.get_chat_member(chat_id, user_id)
+        return member.status in [ChatMember.MEMBER, ChatMember.ADMINISTRATOR, ChatMember.OWNER]
+    except Exception:
+        return False
+
 async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
     """Check if user is admin in the group"""
     if not update.effective_chat or not update.effective_user:
@@ -167,8 +181,8 @@ async def is_group_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     except Exception:
         return False
 
-async def is_authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Check if user is authorized to use the bot"""
+async def is_authorized_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if user is authorized for admin commands (write operations)"""
     if not update.effective_user or not update.effective_chat:
         return False
     
@@ -185,9 +199,36 @@ async def is_authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> b
     
     return False
 
-async def guard(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    """Guard function to check authorization"""
-    if not await is_authorized(update, context):
+async def is_authorized_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Check if user is authorized for read-only commands"""
+    if not update.effective_user or not update.effective_chat:
+        return False
+    
+    user_id = update.effective_user.id
+    chat = update.effective_chat
+    
+    # Private chat: check if it's the allowed user
+    if chat.type == "private":
+        return user_id == ALLOWED_USER_ID
+    
+    # Group chat: any member can use read-only commands
+    if chat.type in ["group", "supergroup"]:
+        return await is_group_member(update, context)
+    
+    return False
+
+async def guard_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Guard function for admin commands"""
+    if not await is_authorized_admin(update, context):
+        if update.effective_chat and update.effective_chat.type == "private":
+            await context.bot.send_message(update.effective_chat.id, "❌ Not authorized.")
+        # Don't respond in groups to avoid spam
+        return False
+    return True
+
+async def guard_read(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    """Guard function for read-only commands"""
+    if not await is_authorized_read(update, context):
         if update.effective_chat and update.effective_chat.type == "private":
             await context.bot.send_message(update.effective_chat.id, "❌ Not authorized.")
         # Don't respond in groups to avoid spam
@@ -262,6 +303,40 @@ async def get_team_round_roster(session: aiohttp.ClientSession, round_id: str, t
     data = await fetch_json(session, f"{BASE}/rosters/per-round/{round_id}/{team_id}")
     return data.get("data", {})
 
+async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug: str, search_term: str, search_type: str) -> Optional[Dict[str, Any]]:
+    """Find a team by name or owner name. Returns team info with ranking data."""
+    rounds = await get_rounds(session, league_slug)
+    if not rounds:
+        return None
+    
+    round_obj = pick_current_round(rounds)
+    if not round_obj:
+        return None
+    
+    round_id = round_obj["id"]
+    ranking = await get_league_ranking(session, league_slug, round_id)
+    
+    search_term_lower = search_term.lower()
+    
+    for item in ranking:
+        team_name = item["userTeam"]["name"].lower()
+        owner_name = (item["userTeam"].get("ownerName") or "").lower()
+        
+        if search_type == "team" and search_term_lower in team_name:
+            return {
+                "team_info": item,
+                "round_obj": round_obj,
+                "round_id": round_id
+            }
+        elif search_type == "owner" and search_term_lower in owner_name:
+            return {
+                "team_info": item,
+                "round_obj": round_obj,
+                "round_id": round_id
+            }
+    
+    return None
+
 
 # ====== Formatting ======
 def fmt_standings(league_slug: str, round_obj: Dict[str, Any], rows: List[Tuple[int, str, str, float]], 
@@ -296,6 +371,146 @@ def fmt_standings(league_slug: str, round_obj: Dict[str, Any], rows: List[Tuple[
         message += f"\n\n🕒 <i>Updated at {current_time}</i>"
     
     return message
+
+def format_score_details(details: List[Dict[str, Any]]) -> str:
+    """Format game scoring details into readable text"""
+    lines = []
+    
+    detail_names = {
+        "kills": "K", "asssits": "A", "deaths": "D",
+        "cs": "CS", "gold_advantage_at_14": "Gold@14",
+        "kp_70": "KP>70%", "damage_share_30": "DMG>30%",
+        "victory": "Victory", "underdog_victory": "Underdog Win",
+        "stomp": "Stomp", "perfect_scores": "Perfect Game",
+        "triple_kills": "Triple Kill", "over_ten_kills": "10+ Kills",
+        "jng_barons": "Baron", "jng_dragon_soul": "Dragon Soul",
+        "jng_kp_over_75": "KP>75%", "sup_kp_over_75": "KP>75%",
+        "sup_vision_score": "Vision", "top_damage_share": "DMG Share",
+        "top_tank": "Tank", "top_solo_kills": "Solo Kill"
+    }
+    
+    for detail in details:
+        detail_type = detail.get("detailType", "")
+        count = detail.get("count", 0)
+        value = detail.get("value", 0)
+        display_mode = detail.get("displayMode", "")
+        
+        name = detail_names.get(detail_type, detail_type)
+        
+        if display_mode == "percent":
+            lines.append(f"• {name}: {count:.0%} (+{value})")
+        elif display_mode == "single":
+            if value > 0:
+                lines.append(f"• {name} (+{value})")
+        else:
+            if detail_type in ["kills", "asssits", "deaths"]:
+                lines.append(f"• {name}: {count} ({value:+})")
+            else:
+                lines.append(f"• {name}: {count} (+{value})")
+    
+    return "\n".join(lines)
+
+def fmt_team_details(team_info: Dict[str, Any], round_obj: Dict[str, Any], roster_data: Dict[str, Any]) -> str:
+    """Format detailed team information with roster and game details"""
+    def escape_html(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    # Team header
+    team_name = escape_html(team_info["userTeam"]["name"])
+    owner_name = escape_html(team_info["userTeam"].get("ownerName", "Unknown"))
+    rank = team_info.get("rank", "?")
+    
+    # Round roster info
+    round_roster = roster_data.get("roundRoster", {})
+    points_partial = round_roster.get("pointsPartial", 0) or 0
+    pre_budget = round_roster.get("preRoundBudget", 0)
+    
+    # Medal emoji based on rank
+    def get_rank_medal(r):
+        if r == 1: return "🥇"
+        elif r == 2: return "🥈" 
+        elif r == 3: return "🥉"
+        else: return f"#{r}"
+    
+    rank_display = get_rank_medal(rank)
+    
+    message = f"🏆 <b>{team_name}</b>\n"
+    message += f"👤 <b>{owner_name}</b> • {rank_display}\n"
+    message += f"📊 <b>{points_partial:.2f}</b> pontos • 💰 {pre_budget:.1f}M budget\n\n"
+    message += f"🧭 <b>{escape_html(round_obj.get('name', ''))}</b> ({escape_html(round_obj.get('status', ''))})\n\n"
+    
+    # Roster players
+    roster_players = roster_data.get("rosterPlayers", [])
+    if not roster_players:
+        message += "<i>No roster data available</i>"
+        return message
+    
+    role_emojis = {
+        "top": "⚔️", "jungle": "🌿", "mid": "🔮", 
+        "bottom": "🏹", "support": "🛡️"
+    }
+    
+    # Sort players by role order: top, jungle, mid, bottom, support
+    role_order = ["top", "jungle", "mid", "bottom", "support"]
+    roster_players.sort(key=lambda p: role_order.index(p.get("role", "support")) if p.get("role") in role_order else 999)
+    
+    for player in roster_players:
+        message += format_player_section(player, role_emojis)
+    
+    return message.strip()
+
+def format_player_section(player: Dict[str, Any], role_emojis: Dict[str, str]) -> str:
+    """Format individual player section"""
+    def escape_html(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    role = player.get("role", "")
+    role_emoji = role_emojis.get(role, "🎮")
+    
+    esports_player = player.get("roundEsportsPlayer", {})
+    pro_player = esports_player.get("proPlayer", {})
+    
+    player_name = escape_html(pro_player.get("name", "Unknown"))
+    team_name_short = escape_html(pro_player.get("team", {}).get("name", ""))
+    price = esports_player.get("preRoundPrice", 0)
+    player_points = player.get("pointsPartial") or 0
+    
+    section = f"{role_emoji} <b>{player_name}</b> ({team_name_short})\n"
+    section += f"💰 {price}M • 📊 <b>{player_points:.2f}</b> pts\n"
+    
+    # Games details in expandable blockquote
+    games = player.get("games", [])
+    if games:
+        games_text = format_games_details(games)
+        if games_text:
+            section += f"<blockquote expandable>{games_text.strip()}</blockquote>\n"
+    else:
+        section += "<i>No games played yet</i>\n"
+    
+    section += "\n"
+    return section
+
+def format_games_details(games: List[Dict[str, Any]]) -> str:
+    """Format games details for a player"""
+    def escape_html(text: str) -> str:
+        return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+    
+    games_text = ""
+    for i, game in enumerate(games, 1):
+        opponent = game.get("opponentTeam", {})
+        opponent_name = escape_html(opponent.get("name", "Unknown"))
+        game_points = game.get("points", 0)
+        multiplier = game.get("multiplier", 1)
+        
+        multiplier_text = f" (x{multiplier})" if multiplier != 1 else ""
+        games_text += f"<b>Game {i}</b> vs {opponent_name}: <b>{game_points:.2f}</b>{multiplier_text}\n"
+        
+        details = game.get("details", [])
+        if details:
+            games_text += format_score_details(details) + "\n"
+        games_text += "\n"
+    
+    return games_text
 
 def hash_payload(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
@@ -340,7 +555,7 @@ async def gather_live_scores(league_slug: str) -> Tuple[str, Dict[str, Any]]:
 
 # ====== Commands ======
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_read(update, context): return
     
     chat = update.effective_chat
     user = update.effective_user
@@ -351,6 +566,8 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "🤖 <b>LTA Fantasy Bot</b>\n\n"
             "<b>Private Chat Commands:</b>\n"
             "/scores &lt;league_slug&gt; - Get current standings\n"
+            "/team &lt;league_slug&gt; &lt;team_name&gt; - Get detailed team info\n"
+            "/owner &lt;league_slug&gt; &lt;owner_name&gt; - Find team by owner\n"
             "/watch &lt;league_slug&gt; - Start monitoring league\n"
             "/unwatch - Stop monitoring\n"
             "/auth &lt;token&gt; - Update session token\n\n"
@@ -367,16 +584,20 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"🤖 <b>LTA Fantasy Bot</b> (Group Mode)\n\n"
             f"{status}\n\n"
-            "<b>Admin Commands:</b>\n"
+            "<b>Commands for All Members:</b>\n"
+            "/scores - Show current standings\n"
+            "/team &lt;name&gt; - Get detailed team info\n"
+            "/owner &lt;name&gt; - Find team by owner name\n"
+            "/getleague - Show current league\n\n"
+            "<b>Admin Only Commands:</b>\n"
             "/setleague &lt;slug&gt; - Attach league to group\n"
             "/startwatch - Start live monitoring\n"
-            "/stopwatch - Stop monitoring\n"
-            "/getleague - Show current league",
+            "/stopwatch - Stop monitoring",
             parse_mode="HTML"
         )
 
 async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_read(update, context): return
     
     chat = update.effective_chat
     user = update.effective_user
@@ -404,7 +625,7 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Error: {e}")
 
 async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_admin(update, context): return
     
     chat = update.effective_chat
     user = update.effective_user
@@ -435,7 +656,7 @@ async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"✅ League set to <code>{league_slug}</code> for this group!", parse_mode="HTML")
 
 async def getleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_read(update, context): return
     
     chat = update.effective_chat
     if chat.type == "private":
@@ -645,7 +866,7 @@ def cleanup_chat_data(chat_id: int):
 
 # Legacy watch command for private chats
 async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_admin(update, context): return
     
     chat = update.effective_chat
     if chat.type != "private":
@@ -670,7 +891,7 @@ async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"👀 Watching <code>{league}</code> every {POLL_SECS}s. Use /unwatch to stop.", parse_mode="HTML")
 
 async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_admin(update, context): return
     
     chat = update.effective_chat
     user = update.effective_user
@@ -699,7 +920,7 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"👀 Started watching <code>{league}</code> every {POLL_SECS}s!\nUse /stopwatch to stop.", parse_mode="HTML")
 
 async def stopwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_admin(update, context): return
     
     chat = update.effective_chat
     user = update.effective_user
@@ -722,11 +943,11 @@ async def stopwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # Legacy unwatch for private chats
 async def unwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_admin(update, context): return
     await stopwatch_cmd(update, context)
 
 async def auth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard(update, context): return
+    if not await guard_admin(update, context): return
     
     user = update.effective_user
     logger.info(f"Auth command from user {user.id}")
@@ -738,6 +959,98 @@ async def auth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     CURRENT_TOKEN["x_session_token"] = token
     logger.info(f"Session token updated by user {user.id}")
     await update.message.reply_text("Token updated in memory. Try /scores again.")
+
+async def team_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_read(update, context): return
+    
+    chat = update.effective_chat
+    user = update.effective_user
+    logger.info(f"Team command from user {user.id} in chat {chat.id}")
+    
+    # Get league and search term
+    if chat.type == "private":
+        if len(context.args) < 2:
+            await update.message.reply_text("Usage: /team <league_slug> <team_name>")
+            return
+        league = context.args[0].strip()
+        search_term = " ".join(context.args[1:]).strip()
+    else:
+        if not context.args:
+            await update.message.reply_text("Usage: /team <team_name>")
+            return
+        league = get_group_league(chat.id)
+        if not league:
+            await update.message.reply_text("❌ No league attached to this group. Use <code>/setleague &lt;league_slug&gt;</code> first.", parse_mode="HTML")
+            return
+        search_term = " ".join(context.args).strip()
+    
+    try:
+        async with make_session() as session:
+            result = await find_team_by_name_or_owner(session, league, search_term, "team")
+            if not result:
+                await update.message.reply_text(f"❌ Team '<code>{search_term}</code>' not found in league '<code>{league}</code>'.", parse_mode="HTML")
+                return
+            
+            team_info = result["team_info"]
+            round_obj = result["round_obj"]
+            round_id = result["round_id"]
+            team_id = team_info["userTeam"]["id"]
+            
+            roster_data = await get_team_round_roster(session, round_id, team_id)
+            message = fmt_team_details(team_info, round_obj, roster_data)
+            
+            await update.message.reply_text(message, parse_mode="HTML")
+    except PermissionError as e:
+        await update.message.reply_text(f"🔐 {e}")
+    except Exception as e:
+        logger.error(f"Error in team command: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
+
+async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not await guard_read(update, context): return
+    
+    chat = update.effective_chat
+    user = update.effective_user
+    logger.info(f"Owner command from user {user.id} in chat {chat.id}")
+    
+    # Get league and search term  
+    if chat.type == "private":
+        if len(context.args) < 2:
+            await update.message.reply_text("Usage: /owner <league_slug> <owner_name>")
+            return
+        league = context.args[0].strip()
+        search_term = " ".join(context.args[1:]).strip()
+    else:
+        if not context.args:
+            await update.message.reply_text("Usage: /owner <owner_name>")
+            return
+        league = get_group_league(chat.id)
+        if not league:
+            await update.message.reply_text("❌ No league attached to this group. Use <code>/setleague &lt;league_slug&gt;</code> first.", parse_mode="HTML")
+            return
+        search_term = " ".join(context.args).strip()
+    
+    try:
+        async with make_session() as session:
+            result = await find_team_by_name_or_owner(session, league, search_term, "owner")
+            if not result:
+                await update.message.reply_text(f"❌ Owner '<code>{search_term}</code>' not found in league '<code>{league}</code>'.", parse_mode="HTML")
+                return
+            
+            team_info = result["team_info"]
+            round_obj = result["round_obj"]
+            round_id = result["round_id"]
+            team_id = team_info["userTeam"]["id"]
+            
+            roster_data = await get_team_round_roster(session, round_id, team_id)
+            message = fmt_team_details(team_info, round_obj, roster_data)
+            
+            await update.message.reply_text(message, parse_mode="HTML")
+    except PermissionError as e:
+        await update.message.reply_text(f"🔐 {e}")
+    except Exception as e:
+        logger.error(f"Error in owner command: {e}")
+        await update.message.reply_text(f"❌ Error: {e}")
 
 def main():
     # Load persistent storage
@@ -759,6 +1072,8 @@ def main():
     private_commands = [
         BotCommand("start", "Show help and available commands"),
         BotCommand("scores", "Get standings for a specific league"),
+        BotCommand("team", "Get detailed team information"),
+        BotCommand("owner", "Find team by owner name"),
         BotCommand("watch", "Monitor a specific league for updates"),
         BotCommand("unwatch", "Stop monitoring"),
         BotCommand("auth", "Update session token"),
@@ -767,6 +1082,8 @@ def main():
     group_commands = [
         BotCommand("start", "Show help and available commands"),
         BotCommand("scores", "Get standings for group's league"),
+        BotCommand("team", "Get detailed team information"),
+        BotCommand("owner", "Find team by owner name"), 
         BotCommand("setleague", "Attach a league to this group"),
         BotCommand("getleague", "Show current attached league"),
         BotCommand("startwatch", "Start monitoring group's league"),
@@ -833,6 +1150,10 @@ def main():
 
     app.add_handler(CommandHandler("start", start_cmd))
     app.add_handler(CommandHandler("scores", scores_cmd))
+    
+    # Team lookup commands
+    app.add_handler(CommandHandler("team", team_cmd))
+    app.add_handler(CommandHandler("owner", owner_cmd))
     
     # Group-specific commands
     app.add_handler(CommandHandler("setleague", setleague_cmd))
