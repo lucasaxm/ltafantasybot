@@ -3,6 +3,7 @@
 
 # Bot data files
 group_settings.json
+runtime_state.json
 
 # Python
 __pycache__/

@@ -3,6 +3,7 @@ import os
 import hashlib
 import json
 import logging
+from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import aiohttp
@@ -30,6 +31,12 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Reduce telegram library verbosity to avoid getUpdates spam
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING) 
+logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
+logging.getLogger("telegram.bot").setLevel(logging.WARNING)
+
 # ====== Config ======
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
@@ -45,10 +52,12 @@ WATCH_MESSAGE_IDS: Dict[int, int] = {}  # chat_id -> message_id for editing
 LAST_SCORES: Dict[int, Dict[str, float]] = {}  # chat_id -> {team_name: score}
 LAST_RANKINGS: Dict[int, List[str]] = {}  # chat_id -> [team_names in rank order]
 CURRENT_TOKEN: Dict[str, str] = {"x_session_token": X_SESSION_TOKEN}  # mutable store
+FIRST_POLL_AFTER_RESUME: Dict[int, bool] = {}  # chat_id -> True if this is first poll after resume
 
 # persistent storage
 GROUP_SETTINGS_FILE = "group_settings.json"
 GROUP_SETTINGS: Dict[str, Dict[str, Any]] = {}
+RUNTIME_STATE_FILE = "runtime_state.json"
 
 
 # ====== Persistent Storage ======
@@ -74,6 +83,60 @@ def save_group_settings():
         logger.debug("Group settings saved to file")
     except Exception as e:
         logger.error(f"Could not save group settings: {e}")
+
+def load_runtime_state():
+    """Load runtime state from JSON file for seamless restarts"""
+    global LAST_SCORES, LAST_RANKINGS, WATCH_MESSAGE_IDS
+    try:
+        if os.path.exists(RUNTIME_STATE_FILE):
+            with open(RUNTIME_STATE_FILE, 'r') as f:
+                state = json.load(f)
+            
+            # Convert string keys back to int for chat_ids
+            LAST_SCORES = {int(k): v for k, v in state.get("last_scores", {}).items()}
+            LAST_RANKINGS = {int(k): v for k, v in state.get("last_rankings", {}).items()}
+            WATCH_MESSAGE_IDS = {int(k): v for k, v in state.get("watch_message_ids", {}).items()}
+            
+            logger.info(f"Loaded runtime state for {len(LAST_SCORES)} chats")
+        else:
+            logger.info("No existing runtime state file found")
+    except Exception as e:
+        logger.error(f"Could not load runtime state: {e}")
+        # Initialize empty dictionaries on error
+        LAST_SCORES = {}
+        LAST_RANKINGS = {}
+        WATCH_MESSAGE_IDS = {}
+
+def save_runtime_state():
+    """Save runtime state to JSON file for seamless restarts"""
+    try:
+        # Get list of actively watched chats
+        active_chats = list(WATCHERS.keys())
+        
+        state = {
+            "active_chats": active_chats,
+            "last_scores": {str(k): v for k, v in LAST_SCORES.items()},
+            "last_rankings": {str(k): v for k, v in LAST_RANKINGS.items()},
+            "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
+            "last_updated": datetime.now().isoformat()
+        }
+        
+        with open(RUNTIME_STATE_FILE, 'w') as f:
+            json.dump(state, f, indent=2)
+        logger.debug(f"Runtime state saved for {len(active_chats)} active chats")
+    except Exception as e:
+        logger.error(f"Could not save runtime state: {e}")
+
+def get_active_chats_to_resume() -> List[int]:
+    """Get list of chats that were actively being watched before restart"""
+    try:
+        if os.path.exists(RUNTIME_STATE_FILE):
+            with open(RUNTIME_STATE_FILE, 'r') as f:
+                state = json.load(f)
+            return [int(chat_id) for chat_id in state.get("active_chats", [])]
+    except Exception as e:
+        logger.error(f"Could not load active chats list: {e}")
+    return []
 
 def get_group_league(chat_id: int) -> Optional[str]:
     """Get the league attached to a group"""
@@ -388,10 +451,15 @@ async def getleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
     logger.info(f"Started watch loop for chat {chat_id}, league '{league}'")
     poll_count = 0
+    save_counter = 0  # Save state every 3 polls to keep persistence up-to-date
+    
+    # Mark this chat as having resumed (if it was resumed)
+    is_resumed = FIRST_POLL_AFTER_RESUME.get(chat_id, False)
     
     while not stop_event.is_set():
         try:
             poll_count += 1
+            save_counter += 1
             logger.debug(f"Poll #{poll_count} for chat {chat_id}")
             
             # Get structured data for score tracking
@@ -401,24 +469,47 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
                 await asyncio.sleep(POLL_SECS)
                 continue
             
-            # Calculate score changes
-            score_changes = calculate_score_changes(chat_id, current_scores)
+            # Calculate score changes (but not on first poll after resume to avoid false arrows)
+            score_changes = calculate_score_changes(chat_id, current_scores) if not is_resumed else {}
             
-            # Check if ranking changed
+            # Check if ranking changed (will return False on first poll after resume)
             ranking_changed = check_ranking_changed(chat_id, current_ranking)
             
             # Build message with changes and timestamp
             message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True)
             
-            # Handle ranking change notification
-            if ranking_changed and chat_id in LAST_RANKINGS:
+            # Handle ranking change notification (only if not first poll after resume)
+            if ranking_changed and chat_id in LAST_RANKINGS and not is_resumed:
                 await send_ranking_change_notification(bot, chat_id, league, current_round, teams_data)
             
-            # Send or edit the main message
-            await send_or_edit_message(bot, chat_id, message, ranking_changed, poll_count)
+            # Send or edit the main message - always try to edit first for seamless experience
+            await send_or_edit_message(bot, chat_id, message, ranking_changed and not is_resumed, poll_count)
             
             # Update tracking data
             update_tracking_data(chat_id, current_scores, current_ranking, message)
+            
+            # Save runtime state more frequently and when important changes happen
+            should_save = (
+                save_counter >= 3 or  # Every 3 polls (90 seconds)
+                ranking_changed or    # When ranking changes
+                any(arrow != "" for arrow in score_changes.values())  # When any score changes
+            )
+            
+            if should_save:
+                save_reason = []
+                if save_counter >= 3: save_reason.append("interval")
+                if ranking_changed and not is_resumed: save_reason.append("ranking_changed") 
+                if any(arrow != "" for arrow in score_changes.values()): save_reason.append("score_changes")
+                
+                save_runtime_state()
+                save_counter = 0
+                logger.debug(f"Saved runtime state for chat {chat_id}: {', '.join(save_reason) if save_reason else 'unknown'}")
+            
+            # Clear the first poll flag after the first successful poll
+            if is_resumed:
+                FIRST_POLL_AFTER_RESUME[chat_id] = False
+                is_resumed = False
+                logger.debug(f"Cleared first poll flag for chat {chat_id}")
                 
         except PermissionError as e:
             logger.error(f"Auth error for chat {chat_id}: {e}")
@@ -433,7 +524,8 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
         except asyncio.TimeoutError:
             pass
     
-    # Clean up tracking data when loop stops
+    # Save state when loop stops and clean up tracking data
+    save_runtime_state()
     cleanup_chat_data(chat_id)
     logger.info(f"Watch loop stopped for chat {chat_id}")
 
@@ -497,7 +589,10 @@ def calculate_score_changes(chat_id: int, current_scores: Dict[str, float]) -> D
     return score_changes
 
 def check_ranking_changed(chat_id: int, current_ranking: List[str]) -> bool:
-    """Check if team ranking has changed."""
+    """Check if team ranking has changed, but not on first poll after resume."""
+    # Don't report ranking changes on the first poll after resume
+    if FIRST_POLL_AFTER_RESUME.get(chat_id, False):
+        return False
     return chat_id not in LAST_RANKINGS or LAST_RANKINGS[chat_id] != current_ranking
 
 async def send_ranking_change_notification(bot, chat_id: int, league: str, current_round, teams_data):
@@ -508,15 +603,11 @@ async def send_ranking_change_notification(bot, chat_id: int, league: str, curre
     await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
     logger.info(f"Sent ranking change notification to chat {chat_id}")
 
-async def send_or_edit_message(bot, chat_id: int, message: str, ranking_changed: bool, poll_count: int):
-    """Send new message or edit existing one."""
-    if chat_id not in WATCH_MESSAGE_IDS or ranking_changed:
-        # Send new message
-        sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
-        WATCH_MESSAGE_IDS[chat_id] = sent_message.message_id
-        logger.info(f"Sent new scores message to chat {chat_id} (poll #{poll_count})")
-    else:
-        # Edit existing message
+async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool, poll_count: int):
+    """Always try to edit existing message first for seamless experience, send new only if editing fails."""
+    
+    # Try to edit existing message first (seamless experience)
+    if chat_id in WATCH_MESSAGE_IDS and not force_new:
         try:
             await bot.edit_message_text(
                 chat_id=chat_id,
@@ -524,12 +615,19 @@ async def send_or_edit_message(bot, chat_id: int, message: str, ranking_changed:
                 text=message,
                 parse_mode="HTML"
             )
-            logger.debug(f"Updated scores message in chat {chat_id} (poll #{poll_count})")
+            logger.debug(f"Seamlessly updated scores message in chat {chat_id} (poll #{poll_count})")
+            return
         except Exception as edit_error:
-            logger.warning(f"Edit failed, sending new message: {edit_error}")
-            sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
-            WATCH_MESSAGE_IDS[chat_id] = sent_message.message_id
-            logger.info(f"Sent new message after edit failure to chat {chat_id}")
+            logger.debug(f"Edit failed (expected after restart), sending new message: {edit_error}")
+    
+    # Send new message if editing failed or was forced
+    try:
+        sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
+        WATCH_MESSAGE_IDS[chat_id] = sent_message.message_id
+        action = "new" if force_new else "replacement"
+        logger.info(f"Sent {action} scores message to chat {chat_id} (poll #{poll_count})")
+    except Exception as send_error:
+        logger.error(f"Failed to send message to chat {chat_id}: {send_error}")
 
 def update_tracking_data(chat_id: int, current_scores: Dict[str, float], 
                         current_ranking: List[str], message: str):
@@ -543,6 +641,7 @@ def cleanup_chat_data(chat_id: int):
     LAST_SCORES.pop(chat_id, None)
     LAST_RANKINGS.pop(chat_id, None)
     WATCH_MESSAGE_IDS.pop(chat_id, None)
+    FIRST_POLL_AFTER_RESUME.pop(chat_id, None)
 
 # Legacy watch command for private chats
 async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -567,6 +666,7 @@ async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def runner():
         await watch_loop(chat_id, league, context.bot, stop_event)
     WATCHERS[chat_id] = asyncio.create_task(runner())
+    
     await update.message.reply_text(f"👀 Watching <code>{league}</code> every {POLL_SECS}s. Use /unwatch to stop.", parse_mode="HTML")
 
 async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -594,6 +694,7 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     async def runner():
         await watch_loop(chat_id, league, context.bot, stop_event)
     WATCHERS[chat_id] = asyncio.create_task(runner())
+    
     logger.info(f"Started watching '{league}' for group {chat_id}")
     await update.message.reply_text(f"👀 Started watching <code>{league}</code> every {POLL_SECS}s!\nUse /stopwatch to stop.", parse_mode="HTML")
 
@@ -610,8 +711,9 @@ async def stopwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         WATCHERS[chat_id].cancel()
         del WATCHERS[chat_id]
         
-        # Clean up tracking data
+        # Clean up tracking data and save the updated state (no longer actively watching)
         cleanup_chat_data(chat_id)
+        save_runtime_state()
         
         logger.info(f"Stopped watching for chat {chat_id}")
         await update.message.reply_text("🛑 Stopped watching.")
@@ -640,6 +742,7 @@ async def auth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def main():
     # Load persistent storage
     load_group_settings()
+    load_runtime_state()
     
     # Validate required environment variables
     if not BOT_TOKEN:
@@ -670,6 +773,45 @@ def main():
         BotCommand("stopwatch", "Stop monitoring"),
     ]
     
+    # Auto-resume functionality
+    async def resume_watchers(application: Application) -> None:
+        """Resume watching for chats that were being monitored before restart"""
+        chats_to_resume = get_active_chats_to_resume()
+        if not chats_to_resume:
+            logger.info("No chats to resume watching")
+            return
+        
+        logger.info(f"Attempting to resume watching for {len(chats_to_resume)} chats")
+        resumed_count = 0
+        
+        for chat_id in chats_to_resume:
+            try:
+                # Get the league for this chat
+                league = get_group_league(chat_id)
+                if not league:
+                    logger.warning(f"No league found for chat {chat_id}, skipping resume")
+                    continue
+                
+                # Start watching again silently
+                stop_event = asyncio.Event()
+                async def runner():
+                    await watch_loop(chat_id, league, application.bot, stop_event)
+                
+                # Mark this chat as resuming so first poll doesn't trigger false change notifications
+                FIRST_POLL_AFTER_RESUME[chat_id] = True
+                
+                WATCHERS[chat_id] = asyncio.create_task(runner())
+                resumed_count += 1
+                logger.info(f"Silently resumed watching '{league}' for chat {chat_id}")
+                    
+            except Exception as e:
+                logger.error(f"Failed to resume watching for chat {chat_id}: {e}")
+        
+        if resumed_count > 0:
+            logger.info(f"Successfully resumed watching for {resumed_count}/{len(chats_to_resume)} chats")
+        else:
+            logger.warning("Could not resume watching for any chats")
+    
     # Set commands for the bot
     async def post_init(application: Application) -> None:
         logger.info("Setting up command menus...")
@@ -682,6 +824,10 @@ def main():
             scope=BotCommandScopeAllPrivateChats()
         )
         logger.info("Command menus configured")
+        
+        # Resume watchers after a short delay to ensure bot is fully initialized
+        await asyncio.sleep(2)
+        await resume_watchers(application)
     
     app.post_init = post_init
 
