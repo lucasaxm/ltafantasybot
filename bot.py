@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 
 import aiohttp
-import socket
 from telegram import Update, ChatMember, BotCommand, BotCommandScopeAllPrivateChats
 from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
 
@@ -38,13 +37,52 @@ logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
 logging.getLogger("telegram.bot").setLevel(logging.WARNING)
 
-# ====== Config ======
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
-X_SESSION_TOKEN = os.getenv("X_SESSION_TOKEN", "").strip()
-POLL_SECS = int(os.getenv("POLL_SECS", "30"))
+# ====== Configuration ======
+class Config:
+    """Application configuration with smart API endpoint selection."""
+    
+    # Telegram Bot Configuration
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
+    
+    # LTA Fantasy API Configuration
+    X_SESSION_TOKEN = os.getenv("X_SESSION_TOKEN", "").strip()
+    POLL_SECS = int(os.getenv("POLL_SECS", "30"))
+    
+    # API Endpoint Configuration
+    LTA_API_URL = os.getenv("LTA_API_URL", "https://api.ltafantasy.com").strip()
+    
+    @classmethod
+    def validate_config(cls) -> None:
+        """Validate required configuration is present."""
+        if not cls.BOT_TOKEN:
+            raise ValueError("BOT_TOKEN environment variable is required")
+        if cls.ALLOWED_USER_ID == 0:
+            raise ValueError("ALLOWED_USER_ID environment variable is required")
+        if not cls.X_SESSION_TOKEN:
+            logger.warning("X_SESSION_TOKEN not configured - bot may not work until token is provided via /auth")
+    
+    @classmethod
+    def get_api_base_url(cls) -> str:
+        """
+        Get the API base URL.
+        Uses LTA_API_URL which can be set to either:
+        - https://api.ltafantasy.com (direct API)  
+        - https://your-worker.workers.dev (Cloudflare Worker proxy)
+        """
+        logger.info(f"Using API endpoint: {cls.LTA_API_URL}")
+        return cls.LTA_API_URL
 
-BASE = "https://api.ltafantasy.com"
+# Initialize and validate configuration
+config = Config()
+config.validate_config()
+BASE = config.get_api_base_url()
+
+# Legacy variables for backward compatibility
+BOT_TOKEN = config.BOT_TOKEN
+ALLOWED_USER_ID = config.ALLOWED_USER_ID
+X_SESSION_TOKEN = config.X_SESSION_TOKEN
+POLL_SECS = config.POLL_SECS
 
 # runtime state
 WATCHERS: Dict[int, asyncio.Task] = {}
@@ -252,30 +290,14 @@ def build_headers() -> Dict[str, str]:
     }
     if token:
         h["x-session-token"] = token
-    # Optional cookies for Cloudflare or app session if needed in some networks
-    cookie_parts: List[str] = []
-    cf = os.getenv("CF_CLEARANCE", "").strip()
-    if cf:
-        cookie_parts.append(f"cf_clearance={cf}")
-    lta_sess = (os.getenv("LTAFANTASY_SESSION", "").strip() or
-                os.getenv("LTAFANTASY_SESSION_COOKIE", "").strip())
-    if lta_sess:
-        cookie_parts.append(f"_lolfantasy_session={lta_sess}")
-    if cookie_parts:
-        h["cookie"] = "; ".join(cookie_parts)
     return h
 
 def make_session() -> aiohttp.ClientSession:
     timeout = aiohttp.ClientTimeout(total=25)
-    # Optionally force IPv4 to avoid stricter IPv6 paths on some hosts
-    connector = None
-    if (os.getenv("FORCE_IPV4", "").strip().lower() in ("1", "true", "yes")):
-        connector = aiohttp.TCPConnector(family=socket.AF_INET)
     # Use environment proxies if provided (HTTPS_PROXY/HTTP_PROXY)
     return aiohttp.ClientSession(
         timeout=timeout,
         headers=build_headers(),
-        connector=connector,
         trust_env=True,
     )
 

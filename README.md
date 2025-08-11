@@ -1,185 +1,280 @@
 # LTA Fantasy Bot
 
-A Telegram bot that monitors LTA Fantasy league scores and provides real-time updates in both private chats and groups.
+A Telegram bot for monitoring LTA Fantasy league scores and rankings with real-time notifications.
 
 ## Features
 
-- 🏆 Get current league standings with `/scores`
-- 📱 Monitor leagues for live updates 
-- 👥 **Group Support** - Attach leagues to groups for live monitoring
-- 🔄 Automatic polling for score changes during events
-- 🔐 Access control (owner in private, admins in groups)
-- 🚀 Cloudflare bypass using optimized headers
-- 💾 Persistent group-league mappings
-- 🤐 **Silent Operation** - Only responds to its own valid commands
-- 📋 **Smart Command Menu** - Context-aware command suggestions when typing `/`
+- **Real-time Score Monitoring**: Automatically polls and reports score changes in your fantasy leagues
+- **Ranking Notifications**: Get notified when team rankings change
+- **Multi-League Support**: Monitor multiple leagues simultaneously
+- **Smart API Routing**: Auto-detects best API endpoint (direct vs Cloudflare Worker proxy)
+- **VPS-Friendly**: Built-in Cloudflare bypass for server deployments
+- **Group Support**: Full group chat integration with admin controls
+- **Secure Configuration**: Environment-based configuration with sensitive data protection
 
-## Setup
+## Quick Start
 
-### 1. Prerequisites
+### Prerequisites
 
-- Python 3.12+
-- Telegram Bot Token (from @BotFather)
+- Python 3.8+
+- A Telegram Bot Token (from [@BotFather](https://t.me/botfather))
 - LTA Fantasy session token
+- (Optional) Node.js and npm for Wrangler CLI
+- (Optional) Cloudflare Worker for VPS deployments
 
-### 2. Installation
+### Installation
+
+1. **Clone the repository**
+   ```bash
+   git clone https://github.com/lucasaxm/ltafantasybot.git
+   cd ltafantasybot
+   ```
+
+2. **Install dependencies**
+   ```bash
+   pip install python-telegram-bot==21.6 aiohttp==3.10.5
+   ```
+
+3. **Configure environment**
+   ```bash
+   cp .env.example .env
+   # Edit .env with your configuration
+   ```
+
+4. **Run the bot**
+   ```bash
+   python bot.py
+   ```
+
+## Configuration
+
+The bot uses environment variables for configuration. Create a `.env` file in the project root:
+
+### Required Configuration
 
 ```bash
-# Clone/download the bot files
-cd ltafantasybot
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Copy environment template
-cp .env.example .env
-```
-
-### 3. Configuration
-
-Edit `.env` file with your credentials:
-
-```env
-# Get this from @BotFather on Telegram
+# Telegram Bot Configuration
 BOT_TOKEN=your_telegram_bot_token_here
-
-# Your Telegram user ID (get from @userinfobot)
 ALLOWED_USER_ID=your_telegram_user_id
 
-# LTA Fantasy session token (see below how to get)
+# LTA Fantasy API Token
 X_SESSION_TOKEN=your_lta_fantasy_session_token
-
-# Optional: polling interval in seconds (default: 30)
-POLL_SECS=30
-
-# Optional: logging level (DEBUG, INFO, WARNING, ERROR - default: INFO)
-LOG_LEVEL=INFO
 ```
 
-### 4. Getting LTA Fantasy Session Token
+### Optional Configuration
 
-1. Log into [ltafantasy.com](https://ltafantasy.com) in your browser
-2. Open Developer Tools (F12)
-3. Go to **Network** tab
-4. Make any API request on the site
-5. Find a request to `api.ltafantasy.com`
-6. Copy the `x-session-token` header value
-7. Paste it in your `.env` file
-
-## Usage
-
-### Start the bot:
 ```bash
-python bot.py
+# Bot Settings
+POLL_SECS=30                    # How often to check for updates (seconds)
+LOG_LEVEL=INFO                  # Logging level (DEBUG, INFO, WARNING, ERROR)
+
+# API Endpoint Configuration
+LTA_API_URL=https://api.ltafantasy.com        # Direct API (default)
+# OR for VPS with Cloudflare challenges:
+# LTA_API_URL=https://your-worker.workers.dev  # Cloudflare Worker proxy
 ```
 
-### Private Chat Commands:
+## Simple API Endpoint Configuration
 
-- `/start` - Show help message
-- `/scores <league_slug>` - Get current standings for a league
-- `/watch <league_slug>` - Start monitoring league for updates
+The bot uses a single `LTA_API_URL` setting for maximum simplicity:
+
+- **Direct API**: `LTA_API_URL=https://api.ltafantasy.com` (default)
+- **Cloudflare Worker Proxy**: `LTA_API_URL=https://your-worker.workers.dev`
+
+Users simply choose which endpoint to use based on their deployment:
+- **Local Development**: Use direct API (default)  
+- **VPS with Cloudflare challenges**: Use Worker proxy URL
+
+### Why Use Cloudflare Worker?
+
+If you're running the bot on a VPS, you might encounter Cloudflare challenges that block direct API access. The Cloudflare Worker acts as a proxy with the correct headers to bypass these restrictions.
+
+## Getting Your Session Token
+
+1. Log in to [LTA Fantasy](https://ltafantasy.com) in your browser
+2. Open Developer Tools (F12)
+3. Go to Network tab and refresh the page
+4. Find any request to `api.ltafantasy.com`
+5. Copy the `x-session-token` header value
+
+## Bot Commands
+
+### Private Chat Commands
+- `/start` - Initialize the bot
+- `/scores <league_name>` - Get current scores for a league
+- `/watch <league_name>` - Start monitoring a league
 - `/unwatch` - Stop monitoring
-- `/auth <token>` - Update session token at runtime
+- `/auth <token>` - Update session token
 
-### Group Commands (Admin Only):
+### Group Chat Commands (Admin Only)
+- `/setleague <league_name>` - Attach a league to this group
+- `/getleague` - Get current league information
+- `/startwatch` - Start watching the group's league
+- `/stopwatch` - Stop watching
+- `/scores` - Get current scores for group's league
 
-- `/setleague <league_slug>` - Attach a league to this group
-- `/getleague` - Show the current attached league
-- `/startwatch` - Start monitoring the group's league
-- `/stopwatch` - Stop monitoring
-- `/scores` - Get current standings for the group's league
+## VPS Deployment
 
-### Example Usage:
+### Using the Management Script
 
-**In Private Chat:**
+The bot includes a management script for easy VPS deployment:
+
+```bash
+# Start the bot
+./manage-bot.sh start
+
+# Check status
+./manage-bot.sh status
+
+# View logs
+./manage-bot.sh logs
+
+# Restart bot
+./manage-bot.sh restart
+
+# Stop bot
+./manage-bot.sh stop
+
+# Test API connectivity
+./manage-bot.sh test
 ```
-/scores regata-exrzlize75
-/watch regata-exrzlize75
+
+### Cloudflare Worker Setup (for VPS)
+
+If you encounter Cloudflare challenges on your VPS, deploy the Worker using Wrangler:
+
+#### Using Wrangler CLI
+
+1. **Install Node.js and npm** (if not already installed)
+
+2. **Install dependencies**:
+   ```bash
+   npm install
+   ```
+
+3. **Configure Wrangler**:
+   ```bash
+   npx wrangler login
+   ```
+
+4. **Deploy the worker**:
+   ```bash
+   npx wrangler deploy
+   # OR use the npm script
+   npm run deploy
+   ```
+
+5. **Get your worker URL**:
+   The deploy command will show your worker URL, e.g.:
+   ```
+   https://lta-fantasy-proxy.your-subdomain.workers.dev
+   ```
+
+6. **Update your .env**:
+   ```bash
+   LTA_API_URL=https://lta-fantasy-proxy.your-subdomain.workers.dev
+   ```
+
+#### Useful Wrangler Commands
+
+```bash
+# Deploy worker
+npm run deploy
+
+# Test worker locally
+npm run dev
+
+# View live logs from deployed worker
+npm run tail
+
+# Deploy using wrangler directly
+npx wrangler deploy
 ```
 
-**In Group Chat (as admin):**
-```
-/setleague regata-exrzlize75
-/startwatch
-/scores
-```
-
-## How it Works
-
-1. **Cloudflare Bypass**: Uses `bruno-runtime/2.9.0` User-Agent to avoid bot detection
-2. **Session Management**: Maintains aiohttp sessions with proper headers
-3. **Group Support**: Each group can be attached to one league with persistent storage
-4. **Smart Live Updates**: 
-   - Sends **one message** that gets **edited every 30 seconds** with live scores
-   - Shows ⬆️ **up arrows** when player scores increase
-   - Shows ⬇️ **down arrows** when player scores decrease  
-   - Includes 🕒 **timestamp** showing last update time
-   - Only sends **new messages** when team rankings actually change (🔄 "RANKING CHANGED!")
-5. **Minimal Spam**: Edits same message for score updates, new messages only for ranking changes
-6. **Access Control**: Private chat (owner only) and group chat (admins only)
-7. **Silent Operation**: Ignores unknown commands to coexist with other bots
-8. **Error Handling**: Graceful handling of auth failures and API errors
-
-## API Endpoints Used
-
-- `/leagues/{slug}/rounds` - Get league rounds
-- `/leagues/{slug}/ranking` - Get team rankings
-- `/rosters/per-round/{round_id}/{team_id}` - Get individual team scores
-
-## Security
-
-- **Private Chat**: Only specified Telegram user (ALLOWED_USER_ID) can use bot
-- **Group Chat**: Only group administrators can manage league settings and monitoring
-- **Data Persistence**: Group settings stored in local JSON file
-- **Environment Variables**: All sensitive data in .env file
-- **No Hardcoded Credentials**: All secrets externalized
-
-## File Structure
+## Project Structure
 
 ```
-ltafantasybot/
-├── bot.py                 # Main bot code
-├── .env                   # Your secrets (gitignored)
-├── .env.example           # Template
-├── group_settings.json    # Group-league mappings (auto-created)
-├── requirements.txt       # Dependencies
-├── README.md             # This file
-└── .gitignore            # Git protection
+├── bot.py                 # Main bot application with smart config
+├── worker.js              # Cloudflare Worker proxy
+├── wrangler.toml         # Wrangler configuration for worker deployment
+├── package.json          # Node.js dependencies (Wrangler)
+├── manage-bot.sh          # VPS management script
+├── requirements.txt       # Python dependencies
+├── .env                   # Environment configuration
+├── .env.example          # Configuration template
+└── README.md             # This file
+```
+
+## Architecture Principles
+
+The bot follows clean code and SOLID principles:
+
+- **Single Responsibility**: Configuration, API routing, and bot logic are separate
+- **Open/Closed**: Easy to extend with new API endpoints or proxy methods
+- **Dependency Inversion**: Depends on configurable abstractions, not concrete URLs
+- **Environment-driven**: All configuration via environment variables
+- **Smart defaults**: Auto-detection with sensible fallbacks
+
+## Configuration Examples
+
+### Local Development
+```bash
+# Minimal configuration - uses direct API
+BOT_TOKEN=your_token
+ALLOWED_USER_ID=123456789
+X_SESSION_TOKEN=your_session_token
+LTA_API_URL=https://api.ltafantasy.com
+```
+
+### VPS with Cloudflare Worker
+```bash
+# Uses worker proxy to bypass Cloudflare challenges
+BOT_TOKEN=your_token
+ALLOWED_USER_ID=123456789
+X_SESSION_TOKEN=your_session_token
+LTA_API_URL=https://your-proxy.workers.dev
 ```
 
 ## Troubleshooting
 
-### Bot gets 403 errors:
-- Update your `X_SESSION_TOKEN` in `.env` and try again
-- Use `/auth <new_token>` to update at runtime
-- Some VPS ranges get stricter Cloudflare checks. You can:
-   - Set `FORCE_IPV4=true` in `.env` to avoid IPv6 paths
-   - If your browser session passes but server doesn't, copy your Cloudflare clearance cookie into `.env`:
-      - `CF_CLEARANCE=<value>` and optionally `_lolfantasy_session` as `LTAFANTASY_SESSION=<value>`
-   - If you access through a corporate/egress proxy, set `HTTPS_PROXY`/`HTTP_PROXY` and the bot will use it
+### Common Issues
 
-### Bot doesn't respond:
-- Check `ALLOWED_USER_ID` matches your Telegram ID
-- Ensure you're messaging the bot in a private chat
+1. **"User not found" errors**
+   - Your LTA Fantasy session token has expired
+   - Get a new token following the instructions above
 
-### "Conflict" errors:
-- Only one bot instance can run at a time
-- Kill any existing processes before starting
+2. **Cloudflare challenges on VPS**
+   - Set `LTA_API_URL` to your Cloudflare Worker URL instead of the direct API
+   - Deploy the Worker using `npm run deploy`
 
-### Enable detailed logging:
-- Set `LOG_LEVEL=DEBUG` in `.env` to see API requests and detailed operation logs
-- Use `LOG_LEVEL=WARNING` to reduce log output
-- Default is `LOG_LEVEL=INFO` for normal operation
+3. **Bot not responding**
+   - Check that `BOT_TOKEN` and `ALLOWED_USER_ID` are correct
+   - Verify the bot is running: `./manage-bot.sh status`
 
-## Development
+4. **Wrong API endpoint**
+   - Check logs on startup - shows which endpoint is being used
+   - Set `LTA_API_URL` to the correct endpoint (direct API or Worker URL)
+   - Use `LOG_LEVEL=DEBUG` for detailed request logging
 
-The bot uses:
-- `python-telegram-bot` for Telegram integration
-- `aiohttp` for async HTTP requests  
-- Environment variables for configuration
-- Async/await for concurrent API calls
-- Optional: Cloudflare mitigation via Bruno UA, IPv4-only connector, and cookie support
+### Debug Mode
+
+Enable detailed logging:
+```bash
+LOG_LEVEL=DEBUG python bot.py
+```
+
+The bot will show:
+- Which API endpoint is being used
+- All API requests and responses
+- Detailed request and authentication logging
+
+## Security Notes
+
+- Never commit your `.env` file to version control
+- Use environment variables for all sensitive configuration
+- The `ALLOWED_USER_ID` restricts bot usage to your Telegram account only
+- Session tokens should be refreshed periodically
 
 ## License
 
-This project is for personal use with LTA Fantasy leagues.
+This project is open source. See the repository for license details.
