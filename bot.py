@@ -1095,6 +1095,45 @@ async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in owner command: {e}")
         await update.message.reply_text(f"❌ Error: {e}")
 
+async def startup_health_check():
+    """Perform health check on bot startup"""
+    logger.info("🏥 Running startup health check...")
+    
+    try:
+        # Test LTA Fantasy authentication
+        session = make_session()
+        try:
+            user_data = await fetch_json(session, f'{BASE}/users/me')
+            
+            if user_data and 'data' in user_data:
+                user_info = user_data['data']
+                display_name = user_info.get('riotGameName', 'Unknown')
+                tag_line = user_info.get('riotTagLine', 'Unknown')
+                
+                logger.info(f"✅ Authenticated as: {display_name}#{tag_line}")
+                logger.info("✅ LTA Fantasy API authentication successful")
+                return True
+            else:
+                logger.error("❌ Invalid response from /users/me endpoint")
+                return False
+                
+        except Exception as e:
+            error_msg = str(e)
+            if '401' in error_msg or 'Unauthorized' in error_msg:
+                logger.error("❌ LTA Authentication failed - Session token invalid or expired")
+                logger.error("Use /auth <token> command to update your session token")
+            elif '404' in error_msg:
+                logger.error("❌ /users/me endpoint not found - Check worker configuration")
+            else:
+                logger.error(f"❌ LTA API health check failed: {error_msg}")
+            return False
+        finally:
+            await session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Health check failed: {e}")
+        return False
+
 def main():
     # Load persistent storage
     load_group_settings()
@@ -1107,6 +1146,15 @@ def main():
         raise SystemExit("❌ ALLOWED_USER_ID not set. Check your .env file.")
     if not X_SESSION_TOKEN:
         logger.warning("X_SESSION_TOKEN not set. Use /auth command to set it.")
+    else:
+        # Run health check if session token is available
+        try:
+            import asyncio
+            health_result = asyncio.run(startup_health_check())
+            if not health_result:
+                logger.warning("⚠️ Health check failed but continuing startup...")
+        except Exception as e:
+            logger.warning(f"⚠️ Could not run health check: {e}")
     
     logger.info("Starting LTA Fantasy Bot...")
     app = Application.builder().token(BOT_TOKEN).build()

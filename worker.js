@@ -18,7 +18,8 @@ async function handleRequest(request) {
   // Security: Only allow specific API paths we need
   const allowedPaths = [
     '/leagues/',          // League information and rounds
-    '/rosters/per-round/' // Team rosters and scores
+    '/rosters/per-round/', // Team rosters and scores
+    '/users/me'           // User profile endpoint for authentication testing
   ];
   
   const isAllowed = allowedPaths.some(path => url.pathname.startsWith(path));
