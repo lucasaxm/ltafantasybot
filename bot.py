@@ -324,6 +324,15 @@ async def get_rounds(session: aiohttp.ClientSession, league_slug: str) -> List[D
     return data.get("data", [])
 
 def pick_current_round(rounds: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick current in-progress round only (strict mode for watching)"""
+    inprog = [r for r in rounds if r.get("status") == "in_progress"]
+    if inprog:
+        inprog.sort(key=lambda r: r.get("indexInSplit", -1), reverse=True)
+        return inprog[0]
+    return None
+
+def pick_latest_round(rounds: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick current round with fallback to latest completed (for one-time queries)"""
     inprog = [r for r in rounds if r.get("status") == "in_progress"]
     if inprog:
         inprog.sort(key=lambda r: r.get("indexInSplit", -1), reverse=True)
@@ -352,7 +361,7 @@ async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug
     if not rounds:
         return None
     
-    round_obj = pick_current_round(rounds)
+    round_obj = pick_latest_round(rounds)  # Use latest for searches
     if not round_obj:
         return None
     
@@ -567,7 +576,7 @@ async def gather_live_scores(league_slug: str) -> Tuple[str, Dict[str, Any]]:
         if not rounds:
             logger.warning(f"No rounds found for league: {league_slug}")
             raise RuntimeError("No rounds. Check league slug or token.")
-        round_obj = pick_current_round(rounds)
+        round_obj = pick_latest_round(rounds)  # Use latest for one-time queries
         if not round_obj:
             logger.warning(f"No current round found for league: {league_slug}")
             raise RuntimeError("Could not select a round.")
@@ -728,6 +737,59 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
             
             # Get structured data for score tracking
             current_scores, current_ranking, teams_data, current_round = await get_structured_scores(league)
+            
+            # Check if round completed (no active round found)
+            if current_round is None:
+                # No rounds found at all - error state
+                logger.error(f"No rounds found for league '{league}' (chat {chat_id}) - stopping watch")
+                await bot.send_message(
+                    chat_id, 
+                    f"❌ <b>Error:</b> No rounds found for league <code>{league}</code>.\nStopped watching.",
+                    parse_mode="HTML"
+                )
+                break
+            elif not teams_data:
+                # Round exists but it's not in_progress - check if it completed
+                round_status = current_round.get('status', 'unknown')
+                round_name = current_round.get('name', 'Unknown Round')
+                
+                if round_status == 'completed':
+                    logger.info(f"Round completed for chat {chat_id}, league '{league}' - round: {round_name}")
+                    
+                    # Delete the current watching message if it exists
+                    if chat_id in WATCH_MESSAGE_IDS:
+                        try:
+                            await bot.delete_message(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id])
+                            logger.debug(f"Deleted watching message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id}")
+                        except Exception as e:
+                            logger.warning(f"Could not delete watching message for chat {chat_id}: {e}")
+                    
+                    # Get final scores using the latest completed round
+                    try:
+                        final_msg, _ = await gather_live_scores(league)
+                        final_msg += "\n\n🏁 <b>ROUND COMPLETED!</b>\n<i>Final scores above. Stopped watching.</i>"
+                        await bot.send_message(chat_id, final_msg, parse_mode="HTML")
+                        logger.info(f"Sent final scores for completed round to chat {chat_id}")
+                    except Exception as e:
+                        await bot.send_message(
+                            chat_id, 
+                            f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}",
+                            parse_mode="HTML"
+                        )
+                        logger.error(f"Could not fetch final scores for chat {chat_id}: {e}")
+                    
+                    # Stop the watch loop - cleanup will happen in finally block
+                    break
+                else:
+                    # Unknown state - not in_progress and not completed
+                    logger.error(f"Unknown round state for chat {chat_id}, league '{league}' - round: {round_name}, status: {round_status}")
+                    await bot.send_message(
+                        chat_id, 
+                        f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.",
+                        parse_mode="HTML"
+                    )
+                    break
+            
             if not teams_data:
                 logger.warning(f"No teams data for league: {league}")
                 await asyncio.sleep(POLL_SECS)
@@ -789,20 +851,25 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
             pass
     
     # Save state when loop stops and clean up tracking data
-    save_runtime_state()
     cleanup_chat_data(chat_id)
+    # Remove from watchers dict if still present
+    WATCHERS.pop(chat_id, None)
+    save_runtime_state()  # Force save immediately after cleanup
     logger.info(f"Watch loop stopped for chat {chat_id}")
 
 async def get_structured_scores(league: str):
-    """Get structured score data for tracking."""
+    """Get structured score data for tracking. Returns None for current_round if no active round."""
     async with make_session() as session:
         rounds = await get_rounds(session, league)
         if not rounds:
             return {}, [], [], None
             
-        current_round = pick_current_round(rounds)
+        current_round = pick_current_round(rounds)  # Strict: only in_progress
         if not current_round:
-            return {}, [], [], None
+            # No active round - this means the round we were watching completed
+            # Return the latest round info for status checking
+            latest_round = pick_latest_round(rounds)
+            return {}, [], [], latest_round
             
         round_id = current_round["id"]
         ranking = await get_league_ranking(session, league, round_id)
@@ -926,6 +993,68 @@ async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         WATCHERS[chat_id].cancel()
         del WATCHERS[chat_id]
 
+    # Check if there's an active round to watch
+    try:
+        async with make_session() as session:
+            rounds = await get_rounds(session, league)
+            if not rounds:
+                await update.message.reply_text(f"❌ No rounds found for league <code>{league}</code>.", parse_mode="HTML")
+                return
+            
+            active_round = pick_current_round(rounds)  # Strict: only in_progress
+            if not active_round:
+                # No active round - show status of latest round with helpful messaging
+                latest_round = pick_latest_round(rounds)
+                if latest_round:
+                    status = latest_round.get('status', 'unknown')
+                    round_name = latest_round.get('name', 'Unknown Round')
+                    market_closes_at = latest_round.get('marketClosesAt', '')
+                    
+                    # Get current standings for this round
+                    try:
+                        current_msg, _ = await gather_live_scores(league)
+                        
+                        # Parse market close date to provide better messaging
+                        message = current_msg + f"\n\n❌ <b>No active round to watch</b>\n"
+                        
+                        if status == 'completed':
+                            message += f"🏁 <code>{round_name}</code> has completed.\nWaiting for next round to start."
+                        else:
+                            message += f"📅 <code>{round_name}</code> status: <code>{status}</code>\nWaiting for next round to start."
+                            
+                        if market_closes_at:
+                            try:
+                                from datetime import datetime
+                                market_date = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
+                                current_date = datetime.now(market_date.tzinfo)
+                                
+                                if market_date > current_date:
+                                    time_str = market_date.strftime("%Y-%m-%d %H:%M UTC")
+                                    message += f"\n⏰ Next round likely starts around: {time_str}"
+                            except Exception:
+                                pass  # Ignore date parsing errors
+                                
+                        await update.message.reply_text(message, parse_mode="HTML")
+                        return
+                    except Exception as e:
+                        await update.message.reply_text(
+                            f"❌ No active round in progress for <code>{league}</code>.\n"
+                            f"🏁 Latest round (<code>{round_name}</code>) status: <code>{status}</code>\n"
+                            f"Error fetching scores: {e}", 
+                            parse_mode="HTML"
+                        )
+                        return
+                else:
+                    await update.message.reply_text(
+                        f"❌ No rounds found for league <code>{league}</code>.",
+                        parse_mode="HTML"
+                    )
+                    return
+                
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not check league status: {e}")
+        return
+
     stop_event = asyncio.Event()
     async def runner():
         await watch_loop(chat_id, league, context.bot, stop_event)
@@ -952,6 +1081,68 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = chat.id
     if chat_id in WATCHERS:
         await update.message.reply_text(f"✅ Already watching <code>{league}</code>!", parse_mode="HTML")
+        return
+
+    # Check if there's an active round to watch
+    try:
+        async with make_session() as session:
+            rounds = await get_rounds(session, league)
+            if not rounds:
+                await update.message.reply_text(f"❌ No rounds found for league <code>{league}</code>.", parse_mode="HTML")
+                return
+            
+            active_round = pick_current_round(rounds)  # Strict: only in_progress
+            if not active_round:
+                # No active round - show status of latest round with helpful messaging
+                latest_round = pick_latest_round(rounds)
+                if latest_round:
+                    status = latest_round.get('status', 'unknown')
+                    round_name = latest_round.get('name', 'Unknown Round')
+                    market_closes_at = latest_round.get('marketClosesAt', '')
+                    
+                    # Get current standings for this round
+                    try:
+                        current_msg, _ = await gather_live_scores(league)
+                        
+                        # Parse market close date to provide better messaging
+                        message = current_msg + f"\n\n❌ <b>No active round to watch</b>\n"
+                        
+                        if status == 'completed':
+                            message += f"🏁 <code>{round_name}</code> has completed.\nWaiting for next round to start."
+                        else:
+                            message += f"📅 <code>{round_name}</code> status: <code>{status}</code>\nWaiting for next round to start."
+                            
+                        if market_closes_at:
+                            try:
+                                from datetime import datetime
+                                market_date = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
+                                current_date = datetime.now(market_date.tzinfo)
+                                
+                                if market_date > current_date:
+                                    time_str = market_date.strftime("%Y-%m-%d %H:%M UTC")
+                                    message += f"\n⏰ Next round likely starts around: {time_str}"
+                            except Exception:
+                                pass  # Ignore date parsing errors
+                                
+                        await update.message.reply_text(message, parse_mode="HTML")
+                        return
+                    except Exception as e:
+                        await update.message.reply_text(
+                            f"❌ No active round in progress for <code>{league}</code>.\n"
+                            f"🏁 Latest round (<code>{round_name}</code>) status: <code>{status}</code>\n"
+                            f"Error fetching scores: {e}", 
+                            parse_mode="HTML"
+                        )
+                        return
+                else:
+                    await update.message.reply_text(
+                        f"❌ No rounds found for league <code>{league}</code>.",
+                        parse_mode="HTML"
+                    )
+                    return
+                
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not check league status: {e}")
         return
 
     stop_event = asyncio.Event()
@@ -1193,7 +1384,8 @@ def main():
                     logger.warning(f"No league found for chat {chat_id}, skipping resume")
                     continue
                 
-                # Start watching again silently
+                # Always try to resume - let the watch loop handle completion detection
+                # This ensures users get the "ROUND COMPLETED!" message if round finished while bot was down
                 stop_event = asyncio.Event()
                 async def runner():
                     await watch_loop(chat_id, league, application.bot, stop_event)
@@ -1203,7 +1395,7 @@ def main():
                 
                 WATCHERS[chat_id] = asyncio.create_task(runner())
                 resumed_count += 1
-                logger.info(f"Silently resumed watching '{league}' for chat {chat_id}")
+                logger.info(f"Resumed watching '{league}' for chat {chat_id} - will check round status")
                     
             except Exception as e:
                 logger.error(f"Failed to resume watching for chat {chat_id}: {e}")
@@ -1212,6 +1404,9 @@ def main():
             logger.info(f"Successfully resumed watching for {resumed_count}/{len(chats_to_resume)} chats")
         else:
             logger.warning("Could not resume watching for any chats")
+            
+        # Save state after resume operations (cleanup may have occurred)
+        save_runtime_state()
     
     # Set commands for the bot
     async def post_init(application: Application) -> None:
