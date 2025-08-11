@@ -1147,14 +1147,7 @@ def main():
     if not X_SESSION_TOKEN:
         logger.warning("X_SESSION_TOKEN not set. Use /auth command to set it.")
     else:
-        # Run health check if session token is available
-        try:
-            import asyncio
-            health_result = asyncio.run(startup_health_check())
-            if not health_result:
-                logger.warning("⚠️ Health check failed but continuing startup...")
-        except Exception as e:
-            logger.warning(f"⚠️ Could not run health check: {e}")
+        logger.info("Session token configured, will run health check after bot initialization.")
     
     logger.info("Starting LTA Fantasy Bot...")
     app = Application.builder().token(BOT_TOKEN).build()
@@ -1232,6 +1225,15 @@ def main():
             scope=BotCommandScopeAllPrivateChats()
         )
         logger.info("Command menus configured")
+        
+        # Run health check if session token is available
+        if X_SESSION_TOKEN:
+            try:
+                health_result = await startup_health_check()
+                if not health_result:
+                    logger.warning("⚠️ Health check failed but continuing startup...")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not run health check: {e}")
         
         # Resume watchers after a short delay to ensure bot is fully initialized
         await asyncio.sleep(2)
