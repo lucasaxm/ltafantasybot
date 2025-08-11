@@ -200,22 +200,55 @@ case "$1" in
         esac
         ;;
         
-    update)
-        echo -e "${BLUE}🔄 Updating bot dependencies...${NC}"
+    install)
+        echo -e "${BLUE}📦 Installing/updating bot dependencies...${NC}"
         check_bot_dir
         cd "$BOT_DIR" || exit 1
+        
+        # Check if virtual environment exists, create if needed
+        if [ ! -f "$VENV_PATH" ]; then
+            echo -e "${YELLOW}⚠️ Virtual environment not found. Creating one...${NC}"
+            python3 -m venv .venv
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✅ Virtual environment created successfully${NC}"
+            else
+                echo -e "${RED}❌ Failed to create virtual environment${NC}"
+                exit 1
+            fi
+        fi
+        
+        # Activate virtual environment
         activate_venv
         
+        # Upgrade pip first
+        echo -e "${BLUE}📈 Upgrading pip...${NC}"
+        python3 -m pip install --upgrade pip --quiet
+        
+        # Install/update dependencies
         if [ -f "requirements.txt" ]; then
+            echo -e "${BLUE}📋 Installing/updating dependencies from requirements.txt...${NC}"
             pip install -r requirements.txt --upgrade
-            echo -e "${GREEN}✅ Dependencies updated${NC}"
+            
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✅ Dependencies installed/updated successfully${NC}"
+            else
+                echo -e "${RED}❌ Failed to install/update dependencies${NC}"
+                exit 1
+            fi
         else
-            echo -e "${YELLOW}⚠️ requirements.txt not found${NC}"
+            echo -e "${RED}❌ requirements.txt not found${NC}"
+            echo "Create a requirements.txt file with your dependencies first"
+            exit 1
         fi
         ;;
         
-    health)
-        echo -e "${BLUE}🏥 Running comprehensive health check...${NC}"
+    update)
+        echo -e "${YELLOW}� Note: 'update' is an alias for 'install' - they do the same thing${NC}"
+        $0 install
+        ;;
+        
+    test)
+        echo -e "${BLUE}🧪 Running bot health check and tests...${NC}"
         check_bot_dir
         check_bot_script
         check_venv
@@ -223,7 +256,7 @@ case "$1" in
         cd "$BOT_DIR" || exit 1
         activate_venv
         
-        echo -e "${GREEN}✅ All basic checks passed${NC}"
+        echo -e "${GREEN}✅ Basic environment checks passed${NC}"
         echo -e "${BLUE}📋 Environment info:${NC}"
         echo "  Bot directory: $BOT_DIR"
         echo "  Virtual env: $VENV_PATH"
@@ -234,69 +267,48 @@ case "$1" in
         if [ -f "test_bot.py" ]; then
             python3 test_bot.py
         else
-            echo -e "${YELLOW}⚠️ test_bot.py not found, running basic health check only${NC}"
+            echo -e "${RED}❌ test_bot.py not found${NC}"
+            echo "Please ensure test_bot.py exists for comprehensive testing"
+            exit 1
         fi
         ;;
-    
-    test)
-        echo -e "${BLUE}🧪 Running bot test suite...${NC}"
-        check_bot_dir
-        cd "$BOT_DIR" || exit 1
-        activate_venv
         
-        if [ -f "test_bot.py" ]; then
-            python3 test_bot.py
-        else
-            echo -e "${YELLOW}⚠️ test_bot.py not found, running basic connectivity test...${NC}"
-            python3 -c "
-import sys
-sys.path.insert(0, '.')
-try:
-    import bot
-    import asyncio
-    
-    async def test():
-        session = bot.make_session()
-        try:
-            await bot.fetch_json(session, f'{bot.BASE}/leagues/active')
-            print('✅ API working!')
-        except Exception as e:
-            if 'League not found' in str(e) or '404' in str(e):
-                print('✅ Worker proxy working (API endpoint/token issue is normal)')
-            else:
-                print(f'❌ Issue: {e}')
-        finally:
-            await session.close()
-    
-    asyncio.run(test())
-except ImportError as e:
-    print(f'❌ Import error: {e}')
-    print('Make sure all dependencies are installed')
-except Exception as e:
-    print(f'❌ Test failed: {e}')
-"
-        fi
+    health)
+        echo -e "${YELLOW}💡 Note: 'health' is an alias for 'test' - they do the same thing${NC}"
+        $0 test
         ;;
     
     *)
         echo -e "${BLUE}LTA Fantasy Bot Management${NC}"
         echo ""
-        echo -e "${GREEN}Usage: $0 {start|stop|restart|status|logs|test|update|health}${NC}"
+        echo -e "${GREEN}Usage: $0 {start|stop|restart|status|logs|test|install}${NC}"
         echo ""
-        echo -e "${YELLOW}Commands:${NC}"
-        echo "  start   - Start the bot in background"
-        echo "  stop    - Stop the bot (graceful shutdown)"
-        echo "  restart - Restart the bot (stop + start)"
-        echo "  status  - Show bot status, process info and recent logs"
-        echo "  logs    - Show live bot logs (or 'logs head/clear/size')"
-        echo "  test    - Test API connectivity and bot imports"
-        echo "  update  - Update bot dependencies from requirements.txt"
-        echo "  health  - Run comprehensive health check"
+        echo -e "${YELLOW}Core Commands:${NC}"
+        echo "  start    - Start the bot in background"
+        echo "  stop     - Stop the bot (graceful shutdown)"
+        echo "  restart  - Restart the bot (stop + start)"
+        echo "  status   - Show bot status, process info and recent logs"
+        echo "  logs     - Show live bot logs (or 'logs head/clear/size')"
+        echo "  test     - Run comprehensive health check and tests"
+        echo "  install  - Install/update dependencies in virtual environment"
+        echo ""
+        echo -e "${YELLOW}Aliases:${NC}"
+        echo "  health   - Same as 'test'"
+        echo "  update   - Same as 'install'"
         echo ""
         echo -e "${BLUE}Examples:${NC}"
-        echo "  $0 logs head    - Show first 50 log lines"
-        echo "  $0 logs clear   - Clear the log file"
-        echo "  $0 logs size    - Show log file statistics"
+        echo "  $0 install          - Setup/update dependencies (handles both fresh install and updates)"
+        echo "  $0 test             - Run all health checks and tests"
+        echo "  $0 logs head        - Show first 50 log lines"
+        echo "  $0 logs clear       - Clear the log file"
+        echo "  $0 logs size        - Show log file statistics"
+        echo ""
+        echo -e "${YELLOW}Setup Workflow:${NC}"
+        echo "  1. Clone the repository"
+        echo "  2. Configure .env file with your tokens"
+        echo "  3. Run: $0 install"
+        echo "  4. Run: $0 test"
+        echo "  5. Run: $0 start"
         echo ""
         exit 1
         ;;
