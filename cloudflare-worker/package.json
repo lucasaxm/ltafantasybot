@@ -1,0 +1,17 @@
+{
+  "name": "lta-fantasy-proxy",
+  "version": "1.0.0",
+  "description": "Cloudflare Worker proxy for LTA Fantasy API to bypass Cloudflare challenges on VPS deployments",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "keywords": ["cloudflare", "worker", "proxy", "lta", "fantasy", "api"],
+  "author": "",
+  "license": "ISC",
+  "devDependencies": {
+    "wrangler": "^4.28.1"
+  }
+}

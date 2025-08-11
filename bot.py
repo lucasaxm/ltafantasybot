@@ -37,20 +37,60 @@ logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)
 logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
 logging.getLogger("telegram.bot").setLevel(logging.WARNING)
 
-# ====== Config ======
-BOT_TOKEN = os.getenv("BOT_TOKEN")
-ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
-X_SESSION_TOKEN = os.getenv("X_SESSION_TOKEN", "").strip()
-POLL_SECS = int(os.getenv("POLL_SECS", "30"))
+# ====== Configuration ======
+class Config:
+    """Application configuration with smart API endpoint selection."""
+    
+    # Telegram Bot Configuration
+    BOT_TOKEN = os.getenv("BOT_TOKEN")
+    ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
+    
+    # LTA Fantasy API Configuration
+    X_SESSION_TOKEN = os.getenv("X_SESSION_TOKEN", "").strip()
+    POLL_SECS = int(os.getenv("POLL_SECS", "30"))
+    
+    # API Endpoint Configuration
+    LTA_API_URL = os.getenv("LTA_API_URL", "https://api.ltafantasy.com").strip()
+    
+    @classmethod
+    def validate_config(cls) -> None:
+        """Validate required configuration is present."""
+        if not cls.BOT_TOKEN:
+            raise ValueError("BOT_TOKEN environment variable is required")
+        if cls.ALLOWED_USER_ID == 0:
+            raise ValueError("ALLOWED_USER_ID environment variable is required")
+        if not cls.X_SESSION_TOKEN:
+            logger.warning("X_SESSION_TOKEN not configured - bot may not work until token is provided via /auth")
+    
+    @classmethod
+    def get_api_base_url(cls) -> str:
+        """
+        Get the API base URL.
+        Uses LTA_API_URL which can be set to either:
+        - https://api.ltafantasy.com (direct API)  
+        - https://your-worker.workers.dev (Cloudflare Worker proxy)
+        """
+        logger.info(f"Using API endpoint: {cls.LTA_API_URL}")
+        return cls.LTA_API_URL
 
-BASE = "https://api.ltafantasy.com"
+# Initialize and validate configuration
+config = Config()
+config.validate_config()
+BASE = config.get_api_base_url()
+
+# Legacy variables for backward compatibility
+BOT_TOKEN = config.BOT_TOKEN
+ALLOWED_USER_ID = config.ALLOWED_USER_ID
+X_SESSION_TOKEN = config.X_SESSION_TOKEN
+POLL_SECS = config.POLL_SECS
 
 # runtime state
 WATCHERS: Dict[int, asyncio.Task] = {}
 LAST_SENT_HASH: Dict[int, str] = {}
 WATCH_MESSAGE_IDS: Dict[int, int] = {}  # chat_id -> message_id for editing
-LAST_SCORES: Dict[int, Dict[str, float]] = {}  # chat_id -> {team_name: score}
-LAST_RANKINGS: Dict[int, List[str]] = {}  # chat_id -> [team_names in rank order]
+LAST_SCORES: Dict[int, Dict[str, float]] = {}  # chat_id -> {team_name: round_score}
+LAST_RANKINGS: Dict[int, List[str]] = {}  # chat_id -> [team_names in round rank order]
+LAST_SPLIT_RANKINGS: Dict[int, List[str]] = {}  # chat_id -> [team_names in split rank order]
 CURRENT_TOKEN: Dict[str, str] = {"x_session_token": X_SESSION_TOKEN}  # mutable store
 FIRST_POLL_AFTER_RESUME: Dict[int, bool] = {}  # chat_id -> True if this is first poll after resume
 
@@ -86,7 +126,7 @@ def save_group_settings():
 
 def load_runtime_state():
     """Load runtime state from JSON file for seamless restarts"""
-    global LAST_SCORES, LAST_RANKINGS, WATCH_MESSAGE_IDS
+    global LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS
     try:
         if os.path.exists(RUNTIME_STATE_FILE):
             with open(RUNTIME_STATE_FILE, 'r') as f:
@@ -95,6 +135,7 @@ def load_runtime_state():
             # Convert string keys back to int for chat_ids
             LAST_SCORES = {int(k): v for k, v in state.get("last_scores", {}).items()}
             LAST_RANKINGS = {int(k): v for k, v in state.get("last_rankings", {}).items()}
+            LAST_SPLIT_RANKINGS = {int(k): v for k, v in state.get("last_split_rankings", {}).items()}
             WATCH_MESSAGE_IDS = {int(k): v for k, v in state.get("watch_message_ids", {}).items()}
             
             logger.info(f"Loaded runtime state for {len(LAST_SCORES)} chats")
@@ -105,6 +146,7 @@ def load_runtime_state():
         # Initialize empty dictionaries on error
         LAST_SCORES = {}
         LAST_RANKINGS = {}
+        LAST_SPLIT_RANKINGS = {}
         WATCH_MESSAGE_IDS = {}
 
 def save_runtime_state():
@@ -117,6 +159,7 @@ def save_runtime_state():
             "active_chats": active_chats,
             "last_scores": {str(k): v for k, v in LAST_SCORES.items()},
             "last_rankings": {str(k): v for k, v in LAST_RANKINGS.items()},
+            "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
             "last_updated": datetime.now().isoformat()
         }
@@ -255,8 +298,12 @@ def build_headers() -> Dict[str, str]:
 
 def make_session() -> aiohttp.ClientSession:
     timeout = aiohttp.ClientTimeout(total=25)
-    # set default headers on the session so redirects keep them
-    return aiohttp.ClientSession(timeout=timeout, headers=build_headers())
+    # Use environment proxies if provided (HTTPS_PROXY/HTTP_PROXY)
+    return aiohttp.ClientSession(
+        timeout=timeout,
+        headers=build_headers(),
+        trust_env=True,
+    )
 
 async def fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str, str] | None = None) -> Any:
     logger.debug(f"API request: {url}")
@@ -281,6 +328,15 @@ async def get_rounds(session: aiohttp.ClientSession, league_slug: str) -> List[D
     return data.get("data", [])
 
 def pick_current_round(rounds: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick current in-progress round only (strict mode for watching)"""
+    inprog = [r for r in rounds if r.get("status") == "in_progress"]
+    if inprog:
+        inprog.sort(key=lambda r: r.get("indexInSplit", -1), reverse=True)
+        return inprog[0]
+    return None
+
+def pick_latest_round(rounds: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    """Pick current round with fallback to latest completed (for one-time queries)"""
     inprog = [r for r in rounds if r.get("status") == "in_progress"]
     if inprog:
         inprog.sort(key=lambda r: r.get("indexInSplit", -1), reverse=True)
@@ -309,7 +365,7 @@ async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug
     if not rounds:
         return None
     
-    round_obj = pick_current_round(rounds)
+    round_obj = pick_latest_round(rounds)  # Use latest for searches
     if not round_obj:
         return None
     
@@ -340,12 +396,12 @@ async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug
 
 # ====== Formatting ======
 def fmt_standings(league_slug: str, round_obj: Dict[str, Any], rows: List[Tuple[int, str, str, float]], 
-                 score_changes: Dict[str, str] = None, include_timestamp: bool = False) -> str:
+                 score_changes: Dict[str, str] = None, include_timestamp: bool = False, score_type: str = "Round") -> str:
     # HTML escape function for text content
     def escape_html(text: str) -> str:
         return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
     
-    title = f"🏆 <b>{escape_html(league_slug)}</b>\n🧭 <b>{escape_html(round_obj.get('name', ''))}</b> ({escape_html(round_obj.get('status', ''))})"
+    title = f"🏆 <b>{escape_html(league_slug)}</b>\n🧭 <b>{escape_html(round_obj.get('name', ''))}</b> ({escape_html(round_obj.get('status', ''))})\n📊 <i>{score_type} Scores</i>"
     
     def medal(n: int) -> str:
         if n == 1:
@@ -518,13 +574,13 @@ def hash_payload(text: str) -> str:
 
 # ====== Core aggregation ======
 async def gather_live_scores(league_slug: str) -> Tuple[str, Dict[str, Any]]:
-    logger.debug(f"Gathering scores for league: {league_slug}")
+    logger.debug(f"Gathering split scores for league: {league_slug}")
     async with make_session() as session:
         rounds = await get_rounds(session, league_slug)
         if not rounds:
             logger.warning(f"No rounds found for league: {league_slug}")
             raise RuntimeError("No rounds. Check league slug or token.")
-        round_obj = pick_current_round(rounds)
+        round_obj = pick_latest_round(rounds)  # Use latest for one-time queries
         if not round_obj:
             logger.warning(f"No current round found for league: {league_slug}")
             raise RuntimeError("Could not select a round.")
@@ -532,24 +588,20 @@ async def gather_live_scores(league_slug: str) -> Tuple[str, Dict[str, Any]]:
         logger.debug(f"Using round: {round_obj.get('name', round_id)} ({round_obj.get('status')})")
         ranking = await get_league_ranking(session, league_slug, round_id)
 
-        async def row(item: Dict[str, Any]) -> Tuple[int, str, str, float]:
-            rank = item.get("rank", 0)
-            team = item["userTeam"]["name"]
-            owner = item["userTeam"].get("ownerName") or "—"
-            team_id = item["userTeam"]["id"]
-            roster = await get_team_round_roster(session, round_id, team_id)
-            rr = (roster.get("roundRoster") or {})
-            pts = rr.get("pointsPartial")
-            if pts is None:
-                pts = rr.get("points") or 0.0
-            return (rank, team, owner, float(pts))
-
         rows: List[Tuple[int, str, str, float]] = []
         if ranking:
-            rows = await asyncio.gather(*[row(it) for it in ranking])
+            for item in ranking:
+                rank = item.get("rank", 0)
+                team = item["userTeam"]["name"]
+                owner = item["userTeam"].get("ownerName") or "—"
+                # Use split score directly from ranking API
+                split_score = item.get("score", 0.0)
+                rows.append((rank, team, owner, float(split_score)))
+            # Sort by split score descending, then by rank ascending
             rows.sort(key=lambda r: (-r[3], r[0]))
-        msg = fmt_standings(league_slug, round_obj, rows)
-        logger.info(f"Generated standings for {league_slug}: {len(rows)} teams")
+        
+        msg = fmt_standings(league_slug, round_obj, rows, score_type="Split")
+        logger.info(f"Generated split standings for {league_slug}: {len(rows)} teams")
         return msg, round_obj
 
 
@@ -618,7 +670,7 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     try:
         msg, _ = await gather_live_scores(league)
-        await update.message.reply_text(msg)
+        await update.message.reply_text(msg, parse_mode="HTML")
     except PermissionError as e:
         await update.message.reply_text(f"🔐 {e}")
     except Exception as e:
@@ -683,43 +735,100 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
             save_counter += 1
             logger.debug(f"Poll #{poll_count} for chat {chat_id}")
             
-            # Get structured data for score tracking
+            # Get structured data for round score tracking
             current_scores, current_ranking, teams_data, current_round = await get_structured_scores(league)
+            
+            # Check if round completed (no active round found)
+            if current_round is None:
+                # No rounds found at all - error state
+                logger.error(f"No rounds found for league '{league}' (chat {chat_id}) - stopping watch")
+                await bot.send_message(
+                    chat_id, 
+                    f"❌ <b>Error:</b> No rounds found for league <code>{league}</code>.\nStopped watching.",
+                    parse_mode="HTML"
+                )
+                break
+            elif not teams_data:
+                # Round exists but it's not in_progress - check if it completed
+                round_status = current_round.get('status', 'unknown')
+                round_name = current_round.get('name', 'Unknown Round')
+                
+                if round_status == 'completed':
+                    logger.info(f"Round completed for chat {chat_id}, league '{league}' - round: {round_name}")
+                    
+                    # Delete the current watching message if it exists
+                    if chat_id in WATCH_MESSAGE_IDS:
+                        try:
+                            await bot.delete_message(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id])
+                            logger.debug(f"Deleted watching message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id}")
+                        except Exception as e:
+                            logger.warning(f"Could not delete watching message for chat {chat_id}: {e}")
+                    
+                    # Get final scores using the latest completed round
+                    try:
+                        final_msg, _ = await gather_live_scores(league)
+                        final_msg += "\n\n🏁 <b>ROUND COMPLETED!</b>\n<i>Final scores above. Stopped watching.</i>"
+                        await bot.send_message(chat_id, final_msg, parse_mode="HTML")
+                        logger.info(f"Sent final scores for completed round to chat {chat_id}")
+                    except Exception as e:
+                        await bot.send_message(
+                            chat_id, 
+                            f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}",
+                            parse_mode="HTML"
+                        )
+                        logger.error(f"Could not fetch final scores for chat {chat_id}: {e}")
+                    
+                    # Stop the watch loop - cleanup will happen in finally block
+                    break
+                else:
+                    # Unknown state - not in_progress and not completed
+                    logger.error(f"Unknown round state for chat {chat_id}, league '{league}' - round: {round_name}, status: {round_status}")
+                    await bot.send_message(
+                        chat_id, 
+                        f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.",
+                        parse_mode="HTML"
+                    )
+                    break
+            
             if not teams_data:
                 logger.warning(f"No teams data for league: {league}")
                 await asyncio.sleep(POLL_SECS)
                 continue
+
+            # Get split ranking for change detection
+            round_id = current_round["id"]
+            current_split_ranking, split_teams_data = await get_structured_split_ranking(league, round_id)
             
-            # Calculate score changes (but not on first poll after resume to avoid false arrows)
+            # Calculate score changes for round scores (but not on first poll after resume to avoid false arrows)
             score_changes = calculate_score_changes(chat_id, current_scores) if not is_resumed else {}
             
-            # Check if ranking changed (will return False on first poll after resume)
-            ranking_changed = check_ranking_changed(chat_id, current_ranking)
+            # Check if split ranking changed (will return False on first poll after resume)
+            split_ranking_changed = check_split_ranking_changed(chat_id, current_split_ranking)
             
-            # Build message with changes and timestamp
-            message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True)
+            # Build message with round scores, changes and timestamp
+            message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True, score_type="Round")
             
-            # Handle ranking change notification (only if not first poll after resume)
-            if ranking_changed and chat_id in LAST_RANKINGS and not is_resumed:
-                await send_ranking_change_notification(bot, chat_id, league, current_round, teams_data)
+            # Handle split ranking change notification (only if not first poll after resume)
+            if split_ranking_changed and chat_id in LAST_SPLIT_RANKINGS and not is_resumed:
+                await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data)
             
             # Send or edit the main message - always try to edit first for seamless experience
-            await send_or_edit_message(bot, chat_id, message, ranking_changed and not is_resumed, poll_count)
+            await send_or_edit_message(bot, chat_id, message, split_ranking_changed and not is_resumed, poll_count)
             
-            # Update tracking data
-            update_tracking_data(chat_id, current_scores, current_ranking, message)
+            # Update tracking data (both round and split rankings)
+            update_tracking_data(chat_id, current_scores, current_ranking, current_split_ranking, message)
             
             # Save runtime state more frequently and when important changes happen
             should_save = (
                 save_counter >= 3 or  # Every 3 polls (90 seconds)
-                ranking_changed or    # When ranking changes
+                split_ranking_changed or    # When split ranking changes
                 any(arrow != "" for arrow in score_changes.values())  # When any score changes
             )
             
             if should_save:
                 save_reason = []
                 if save_counter >= 3: save_reason.append("interval")
-                if ranking_changed and not is_resumed: save_reason.append("ranking_changed") 
+                if split_ranking_changed and not is_resumed: save_reason.append("split_ranking_changed") 
                 if any(arrow != "" for arrow in score_changes.values()): save_reason.append("score_changes")
                 
                 save_runtime_state()
@@ -746,50 +855,89 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
             pass
     
     # Save state when loop stops and clean up tracking data
-    save_runtime_state()
     cleanup_chat_data(chat_id)
+    # Remove from watchers dict if still present
+    WATCHERS.pop(chat_id, None)
+    save_runtime_state()  # Force save immediately after cleanup
     logger.info(f"Watch loop stopped for chat {chat_id}")
 
+async def get_split_ranking(session: aiohttp.ClientSession, league_slug: str, round_id: str) -> List[Tuple[int, str, str, float]]:
+    """Get split ranking with split scores directly from the API."""
+    ranking = await get_league_ranking(session, league_slug, round_id)
+    
+    rows = []
+    for item in ranking:
+        rank = item.get("rank", 0)
+        team = item["userTeam"]["name"]
+        owner = item["userTeam"].get("ownerName") or "—"
+        split_score = item.get("score", 0.0)
+        rows.append((rank, team, owner, float(split_score)))
+    
+    # Sort by split score descending, then by rank ascending
+    rows.sort(key=lambda r: (-r[3], r[0]))
+    return rows
+
+async def get_round_scores(session: aiohttp.ClientSession, league_slug: str, round_id: str) -> List[Tuple[int, str, str, float]]:
+    """Get current round scores from individual team rosters."""
+    ranking = await get_league_ranking(session, league_slug, round_id)
+    
+    async def get_team_round_score(item: Dict[str, Any]) -> Tuple[int, str, str, float]:
+        rank = item.get("rank", 0)
+        team = item["userTeam"]["name"]
+        owner = item["userTeam"].get("ownerName") or "—"
+        team_id = item["userTeam"]["id"]
+        roster = await get_team_round_roster(session, round_id, team_id)
+        rr = (roster.get("roundRoster") or {})
+        pts = rr.get("pointsPartial")
+        if pts is None:
+            pts = rr.get("points") or 0.0
+        return (rank, team, owner, float(pts))
+
+    rows = []
+    if ranking:
+        rows = await asyncio.gather(*[get_team_round_score(it) for it in ranking])
+        rows.sort(key=lambda r: (-r[3], r[0]))
+    
+    return rows
+
 async def get_structured_scores(league: str):
-    """Get structured score data for tracking."""
+    """Get structured round score data for live tracking. Returns None for current_round if no active round."""
     async with make_session() as session:
         rounds = await get_rounds(session, league)
         if not rounds:
             return {}, [], [], None
             
-        current_round = pick_current_round(rounds)
+        current_round = pick_current_round(rounds)  # Strict: only in_progress
         if not current_round:
-            return {}, [], [], None
+            # No active round - this means the round we were watching completed
+            # Return the latest round info for status checking
+            latest_round = pick_latest_round(rounds)
+            return {}, [], [], latest_round
             
         round_id = current_round["id"]
-        ranking = await get_league_ranking(session, league, round_id)
         
-        if not ranking:
+        # Get round scores for live tracking
+        teams_data = await get_round_scores(session, league, round_id)
+        
+        if not teams_data:
             return {}, [], [], current_round
         
         current_scores = {}
-        teams_data = []
+        current_ranking = []
         
-        for item in ranking:
-            team_name = item["userTeam"]["name"]
-            team_id = item["userTeam"]["id"]
-            owner_name = item["userTeam"].get("ownerName") or "—"
-            rank = item.get("rank", 0)
-            
-            roster = await get_team_round_roster(session, round_id, team_id)
-            rr = (roster.get("roundRoster") or {})
-            pts = rr.get("pointsPartial")
-            if pts is None:
-                pts = rr.get("points") or 0.0
-            pts = float(pts)
-            
+        for rank, team_name, owner_name, pts in teams_data:
             current_scores[team_name] = pts
-            teams_data.append((rank, team_name, owner_name, pts))
-        
-        teams_data.sort(key=lambda r: (-r[3], r[0]))
-        current_ranking = [team[1] for team in teams_data]
+            current_ranking.append(team_name)
         
         return current_scores, current_ranking, teams_data, current_round
+
+async def get_structured_split_ranking(league: str, round_id: str):
+    """Get structured split ranking data for change detection."""
+    async with make_session() as session:
+        teams_data = await get_split_ranking(session, league, round_id)
+        
+        split_ranking = [team_name for rank, team_name, owner_name, score in teams_data]
+        return split_ranking, teams_data
 
 def calculate_score_changes(chat_id: int, current_scores: Dict[str, float]) -> Dict[str, str]:
     """Calculate score change arrows for each team."""
@@ -816,6 +964,13 @@ def check_ranking_changed(chat_id: int, current_ranking: List[str]) -> bool:
         return False
     return chat_id not in LAST_RANKINGS or LAST_RANKINGS[chat_id] != current_ranking
 
+def check_split_ranking_changed(chat_id: int, current_split_ranking: List[str]) -> bool:
+    """Check if split team ranking has changed, but not on first poll after resume."""
+    # Don't report ranking changes on the first poll after resume
+    if FIRST_POLL_AFTER_RESUME.get(chat_id, False):
+        return False
+    return chat_id not in LAST_SPLIT_RANKINGS or LAST_SPLIT_RANKINGS[chat_id] != current_split_ranking
+
 async def send_ranking_change_notification(bot, chat_id: int, league: str, current_round, teams_data):
     """Send a ranking change notification."""
     ranking_msg = "🔄 <b>RANKING CHANGED!</b>\n\n"
@@ -823,6 +978,14 @@ async def send_ranking_change_notification(bot, chat_id: int, league: str, curre
     
     await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
     logger.info(f"Sent ranking change notification to chat {chat_id}")
+
+async def send_split_ranking_change_notification(bot, chat_id: int, league: str, current_round, split_teams_data):
+    """Send a split ranking change notification."""
+    ranking_msg = "🔄 <b>SPLIT RANKING CHANGED!</b>\n\n"
+    ranking_msg += fmt_standings(league, current_round, split_teams_data, score_type="Split")
+    
+    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
+    logger.info(f"Sent split ranking change notification to chat {chat_id}")
 
 async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool, poll_count: int):
     """Always try to edit existing message first for seamless experience, send new only if editing fails."""
@@ -851,16 +1014,18 @@ async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool,
         logger.error(f"Failed to send message to chat {chat_id}: {send_error}")
 
 def update_tracking_data(chat_id: int, current_scores: Dict[str, float], 
-                        current_ranking: List[str], message: str):
+                        current_ranking: List[str], current_split_ranking: List[str], message: str):
     """Update all tracking dictionaries."""
     LAST_SCORES[chat_id] = current_scores.copy()
     LAST_RANKINGS[chat_id] = current_ranking.copy()
+    LAST_SPLIT_RANKINGS[chat_id] = current_split_ranking.copy()
     LAST_SENT_HASH[chat_id] = hash_payload(message)
 
 def cleanup_chat_data(chat_id: int):
     """Clean up tracking data for a chat."""
     LAST_SCORES.pop(chat_id, None)
     LAST_RANKINGS.pop(chat_id, None)
+    LAST_SPLIT_RANKINGS.pop(chat_id, None)
     WATCH_MESSAGE_IDS.pop(chat_id, None)
     FIRST_POLL_AFTER_RESUME.pop(chat_id, None)
 
@@ -882,6 +1047,68 @@ async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in WATCHERS:
         WATCHERS[chat_id].cancel()
         del WATCHERS[chat_id]
+
+    # Check if there's an active round to watch
+    try:
+        async with make_session() as session:
+            rounds = await get_rounds(session, league)
+            if not rounds:
+                await update.message.reply_text(f"❌ No rounds found for league <code>{league}</code>.", parse_mode="HTML")
+                return
+            
+            active_round = pick_current_round(rounds)  # Strict: only in_progress
+            if not active_round:
+                # No active round - show status of latest round with helpful messaging
+                latest_round = pick_latest_round(rounds)
+                if latest_round:
+                    status = latest_round.get('status', 'unknown')
+                    round_name = latest_round.get('name', 'Unknown Round')
+                    market_closes_at = latest_round.get('marketClosesAt', '')
+                    
+                    # Get current standings for this round
+                    try:
+                        current_msg, _ = await gather_live_scores(league)
+                        
+                        # Parse market close date to provide better messaging
+                        message = current_msg + f"\n\n❌ <b>No active round to watch</b>\n"
+                        
+                        if status == 'completed':
+                            message += f"🏁 <code>{round_name}</code> has completed.\nWaiting for next round to start."
+                        else:
+                            message += f"📅 <code>{round_name}</code> status: <code>{status}</code>\nWaiting for next round to start."
+                            
+                        if market_closes_at:
+                            try:
+                                from datetime import datetime
+                                market_date = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
+                                current_date = datetime.now(market_date.tzinfo)
+                                
+                                if market_date > current_date:
+                                    time_str = market_date.strftime("%Y-%m-%d %H:%M UTC")
+                                    message += f"\n⏰ Next round likely starts around: {time_str}"
+                            except Exception:
+                                pass  # Ignore date parsing errors
+                                
+                        await update.message.reply_text(message, parse_mode="HTML")
+                        return
+                    except Exception as e:
+                        await update.message.reply_text(
+                            f"❌ No active round in progress for <code>{league}</code>.\n"
+                            f"🏁 Latest round (<code>{round_name}</code>) status: <code>{status}</code>\n"
+                            f"Error fetching scores: {e}", 
+                            parse_mode="HTML"
+                        )
+                        return
+                else:
+                    await update.message.reply_text(
+                        f"❌ No rounds found for league <code>{league}</code>.",
+                        parse_mode="HTML"
+                    )
+                    return
+                
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not check league status: {e}")
+        return
 
     stop_event = asyncio.Event()
     async def runner():
@@ -909,6 +1136,68 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = chat.id
     if chat_id in WATCHERS:
         await update.message.reply_text(f"✅ Already watching <code>{league}</code>!", parse_mode="HTML")
+        return
+
+    # Check if there's an active round to watch
+    try:
+        async with make_session() as session:
+            rounds = await get_rounds(session, league)
+            if not rounds:
+                await update.message.reply_text(f"❌ No rounds found for league <code>{league}</code>.", parse_mode="HTML")
+                return
+            
+            active_round = pick_current_round(rounds)  # Strict: only in_progress
+            if not active_round:
+                # No active round - show status of latest round with helpful messaging
+                latest_round = pick_latest_round(rounds)
+                if latest_round:
+                    status = latest_round.get('status', 'unknown')
+                    round_name = latest_round.get('name', 'Unknown Round')
+                    market_closes_at = latest_round.get('marketClosesAt', '')
+                    
+                    # Get current standings for this round
+                    try:
+                        current_msg, _ = await gather_live_scores(league)
+                        
+                        # Parse market close date to provide better messaging
+                        message = current_msg + f"\n\n❌ <b>No active round to watch</b>\n"
+                        
+                        if status == 'completed':
+                            message += f"🏁 <code>{round_name}</code> has completed.\nWaiting for next round to start."
+                        else:
+                            message += f"📅 <code>{round_name}</code> status: <code>{status}</code>\nWaiting for next round to start."
+                            
+                        if market_closes_at:
+                            try:
+                                from datetime import datetime
+                                market_date = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
+                                current_date = datetime.now(market_date.tzinfo)
+                                
+                                if market_date > current_date:
+                                    time_str = market_date.strftime("%Y-%m-%d %H:%M UTC")
+                                    message += f"\n⏰ Next round likely starts around: {time_str}"
+                            except Exception:
+                                pass  # Ignore date parsing errors
+                                
+                        await update.message.reply_text(message, parse_mode="HTML")
+                        return
+                    except Exception as e:
+                        await update.message.reply_text(
+                            f"❌ No active round in progress for <code>{league}</code>.\n"
+                            f"🏁 Latest round (<code>{round_name}</code>) status: <code>{status}</code>\n"
+                            f"Error fetching scores: {e}", 
+                            parse_mode="HTML"
+                        )
+                        return
+                else:
+                    await update.message.reply_text(
+                        f"❌ No rounds found for league <code>{league}</code>.",
+                        parse_mode="HTML"
+                    )
+                    return
+                
+    except Exception as e:
+        await update.message.reply_text(f"❌ Could not check league status: {e}")
         return
 
     stop_event = asyncio.Event()
@@ -1052,6 +1341,45 @@ async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error in owner command: {e}")
         await update.message.reply_text(f"❌ Error: {e}")
 
+async def startup_health_check():
+    """Perform health check on bot startup"""
+    logger.info("🏥 Running startup health check...")
+    
+    try:
+        # Test LTA Fantasy authentication
+        session = make_session()
+        try:
+            user_data = await fetch_json(session, f'{BASE}/users/me')
+            
+            if user_data and 'data' in user_data:
+                user_info = user_data['data']
+                display_name = user_info.get('riotGameName', 'Unknown')
+                tag_line = user_info.get('riotTagLine', 'Unknown')
+                
+                logger.info(f"✅ Authenticated as: {display_name}#{tag_line}")
+                logger.info("✅ LTA Fantasy API authentication successful")
+                return True
+            else:
+                logger.error("❌ Invalid response from /users/me endpoint")
+                return False
+                
+        except Exception as e:
+            error_msg = str(e)
+            if '401' in error_msg or 'Unauthorized' in error_msg:
+                logger.error("❌ LTA Authentication failed - Session token invalid or expired")
+                logger.error("Use /auth <token> command to update your session token")
+            elif '404' in error_msg:
+                logger.error("❌ /users/me endpoint not found - Check worker configuration")
+            else:
+                logger.error(f"❌ LTA API health check failed: {error_msg}")
+            return False
+        finally:
+            await session.close()
+            
+    except Exception as e:
+        logger.error(f"❌ Health check failed: {e}")
+        return False
+
 def main():
     # Load persistent storage
     load_group_settings()
@@ -1064,6 +1392,8 @@ def main():
         raise SystemExit("❌ ALLOWED_USER_ID not set. Check your .env file.")
     if not X_SESSION_TOKEN:
         logger.warning("X_SESSION_TOKEN not set. Use /auth command to set it.")
+    else:
+        logger.info("Session token configured, will run health check after bot initialization.")
     
     logger.info("Starting LTA Fantasy Bot...")
     app = Application.builder().token(BOT_TOKEN).build()
@@ -1109,7 +1439,8 @@ def main():
                     logger.warning(f"No league found for chat {chat_id}, skipping resume")
                     continue
                 
-                # Start watching again silently
+                # Always try to resume - let the watch loop handle completion detection
+                # This ensures users get the "ROUND COMPLETED!" message if round finished while bot was down
                 stop_event = asyncio.Event()
                 async def runner():
                     await watch_loop(chat_id, league, application.bot, stop_event)
@@ -1119,7 +1450,7 @@ def main():
                 
                 WATCHERS[chat_id] = asyncio.create_task(runner())
                 resumed_count += 1
-                logger.info(f"Silently resumed watching '{league}' for chat {chat_id}")
+                logger.info(f"Resumed watching '{league}' for chat {chat_id} - will check round status")
                     
             except Exception as e:
                 logger.error(f"Failed to resume watching for chat {chat_id}: {e}")
@@ -1128,6 +1459,9 @@ def main():
             logger.info(f"Successfully resumed watching for {resumed_count}/{len(chats_to_resume)} chats")
         else:
             logger.warning("Could not resume watching for any chats")
+            
+        # Save state after resume operations (cleanup may have occurred)
+        save_runtime_state()
     
     # Set commands for the bot
     async def post_init(application: Application) -> None:
@@ -1141,6 +1475,15 @@ def main():
             scope=BotCommandScopeAllPrivateChats()
         )
         logger.info("Command menus configured")
+        
+        # Run health check if session token is available
+        if X_SESSION_TOKEN:
+            try:
+                health_result = await startup_health_check()
+                if not health_result:
+                    logger.warning("⚠️ Health check failed but continuing startup...")
+            except Exception as e:
+                logger.warning(f"⚠️ Could not run health check: {e}")
         
         # Resume watchers after a short delay to ensure bot is fully initialized
         await asyncio.sleep(2)

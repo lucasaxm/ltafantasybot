@@ -1,0 +1,10 @@
+name = "lta-fantasy-proxy"
+main = "worker.js"
+compatibility_date = "2023-05-18"
+
+# Cloudflare Worker configuration for LTA Fantasy Bot proxy
+# This worker bypasses Cloudflare challenges for VPS deployments
+
+[env.production]
+# Add any environment variables here if needed
+# The worker automatically forwards x-session-token headers from requests
