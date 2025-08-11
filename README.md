@@ -30,9 +30,9 @@ A Telegram bot for monitoring LTA Fantasy league scores and rankings with real-t
    cd ltafantasybot
    ```
 
-2. **Install dependencies**
+2. **Install dependencies and setup environment**
    ```bash
-   pip install python-telegram-bot==21.6 aiohttp==3.10.5
+   ./manage-bot.sh install
    ```
 
 3. **Configure environment**
@@ -41,9 +41,14 @@ A Telegram bot for monitoring LTA Fantasy league scores and rankings with real-t
    # Edit .env with your configuration
    ```
 
-4. **Run the bot**
+4. **Test your setup**
    ```bash
-   python bot.py
+   ./manage-bot.sh test
+   ```
+
+5. **Run the bot**
+   ```bash
+   ./manage-bot.sh start
    ```
 
 ## Configuration
@@ -113,31 +118,62 @@ If you're running the bot on a VPS, you might encounter Cloudflare challenges th
 - `/stopwatch` - Stop watching
 - `/scores` - Get current scores for group's league
 
-## VPS Deployment
+## Management Script
 
-### Using the Management Script
+The bot includes a comprehensive management script for easy deployment and maintenance. The script automatically handles virtual environment setup, dependency management, and bot lifecycle operations.
 
-The bot includes a management script for easy VPS deployment:
+### Core Commands
 
 ```bash
-# Start the bot
-./manage-bot.sh start
+# Setup and dependency management
+./manage-bot.sh install    # Install/update dependencies (handles both fresh installs and updates)
+./manage-bot.sh test       # Run comprehensive health checks and tests
 
-# Check status
-./manage-bot.sh status
+# Bot lifecycle
+./manage-bot.sh start      # Start the bot in background
+./manage-bot.sh stop       # Stop the bot (graceful shutdown)
+./manage-bot.sh restart    # Restart the bot (stop + start)
 
-# View logs
-./manage-bot.sh logs
-
-# Restart bot
-./manage-bot.sh restart
-
-# Stop bot
-./manage-bot.sh stop
-
-# Test API connectivity
-./manage-bot.sh test
+# Monitoring and logs
+./manage-bot.sh status     # Show bot status, process info and recent logs
+./manage-bot.sh logs       # Show live bot logs (or 'logs head/clear/size')
 ```
+
+### Advanced Log Commands
+
+```bash
+./manage-bot.sh logs head   # Show first 50 log lines
+./manage-bot.sh logs clear  # Clear the log file
+./manage-bot.sh logs size   # Show log file statistics
+```
+
+### Setup Workflow
+
+```bash
+# 1. Clone and enter directory
+git clone https://github.com/lucasaxm/ltafantasybot.git
+cd ltafantasybot
+
+# 2. Install dependencies and setup virtual environment
+./manage-bot.sh install
+
+# 3. Configure your .env file
+cp .env.example .env
+# Edit .env with your tokens
+
+# 4. Run comprehensive tests
+./manage-bot.sh test
+
+# 5. Start the bot
+./manage-bot.sh start
+```
+
+The management script automatically:
+- Creates and manages Python virtual environment (`.venv`)
+- Handles dependency installation and updates
+- Provides comprehensive health checks and API testing
+- Manages bot process lifecycle with proper PID tracking
+- Offers detailed logging and monitoring capabilities
 
 ### Cloudflare Worker Setup (for VPS)
 
@@ -194,15 +230,16 @@ npx wrangler deploy
 ## Project Structure
 
 ```
-├── bot.py                 # Main bot application with smart config
-├── worker.js              # Cloudflare Worker proxy
+├── bot.py                 # Main bot application
+├── test_bot.py            # Comprehensive test suite for validation
+├── manage-bot.sh          # Management script with virtual environment support
+├── worker.js              # Cloudflare Worker proxy for VPS deployments
 ├── wrangler.toml         # Wrangler configuration for worker deployment
-├── package.json          # Node.js dependencies (Wrangler)
-├── manage-bot.sh          # VPS management script
+├── package.json          # Node.js dependencies for Wrangler CLI
 ├── requirements.txt       # Python dependencies
 ├── .env                   # Environment configuration
 ├── .env.example          # Configuration template
-└── README.md             # This file
+└── README.md             # Documentation
 ```
 
 ## Architecture Principles
@@ -250,6 +287,7 @@ LTA_API_URL=https://your-proxy.workers.dev
 3. **Bot not responding**
    - Check that `BOT_TOKEN` and `ALLOWED_USER_ID` are correct
    - Verify the bot is running: `./manage-bot.sh status`
+   - Check recent logs: `./manage-bot.sh logs`
 
 4. **Wrong API endpoint**
    - Check logs on startup - shows which endpoint is being used
@@ -258,15 +296,20 @@ LTA_API_URL=https://your-proxy.workers.dev
 
 ### Debug Mode
 
-Enable detailed logging:
+Enable detailed logging and run comprehensive tests:
 ```bash
-LOG_LEVEL=DEBUG python bot.py
+# Run full test suite with environment validation
+./manage-bot.sh test
+
+# Enable debug logging for detailed output
+LOG_LEVEL=DEBUG ./manage-bot.sh start
 ```
 
-The bot will show:
-- Which API endpoint is being used
-- All API requests and responses
-- Detailed request and authentication logging
+The management script provides:
+- Environment validation and dependency checking
+- API connectivity testing with authentication verification  
+- Comprehensive health checks before starting the bot
+- Real-time log monitoring and analysis
 
 ## Security Notes
 
