@@ -19,8 +19,6 @@ A Telegram bot for monitoring LTA Fantasy league scores and rankings with real-t
 - Python 3.8+
 - A Telegram Bot Token (from [@BotFather](https://t.me/botfather))
 - LTA Fantasy session token
-- (Optional) Node.js and npm for Wrangler CLI
-- (Optional) Cloudflare Worker for VPS deployments
 
 ### Installation
 
@@ -92,7 +90,9 @@ Users simply choose which endpoint to use based on their deployment:
 
 ### Why Use Cloudflare Worker?
 
-If you're running the bot on a VPS, you might encounter Cloudflare challenges that block direct API access. The Cloudflare Worker acts as a proxy with the correct headers to bypass these restrictions.
+If you're running the bot on a VPS, you might encounter Cloudflare challenges that block direct API access. The [Cloudflare Worker](./cloudflare-worker/README.md) acts as a proxy with the correct headers to bypass these restrictions.
+
+**For VPS deployments with Cloudflare issues**: See the [Cloudflare Worker setup guide](./cloudflare-worker/README.md).
 
 ## Getting Your Session Token
 
@@ -175,71 +175,21 @@ The management script automatically:
 - Manages bot process lifecycle with proper PID tracking
 - Offers detailed logging and monitoring capabilities
 
-### Cloudflare Worker Setup (for VPS)
-
-If you encounter Cloudflare challenges on your VPS, deploy the Worker using Wrangler:
-
-#### Using Wrangler CLI
-
-1. **Install Node.js and npm** (if not already installed)
-
-2. **Install dependencies**:
-   ```bash
-   npm install
-   ```
-
-3. **Configure Wrangler**:
-   ```bash
-   npx wrangler login
-   ```
-
-4. **Deploy the worker**:
-   ```bash
-   npx wrangler deploy
-   # OR use the npm script
-   npm run deploy
-   ```
-
-5. **Get your worker URL**:
-   The deploy command will show your worker URL, e.g.:
-   ```
-   https://lta-fantasy-proxy.your-subdomain.workers.dev
-   ```
-
-6. **Update your .env**:
-   ```bash
-   LTA_API_URL=https://lta-fantasy-proxy.your-subdomain.workers.dev
-   ```
-
-#### Useful Wrangler Commands
-
-```bash
-# Deploy worker
-npm run deploy
-
-# Test worker locally
-npm run dev
-
-# View live logs from deployed worker
-npm run tail
-
-# Deploy using wrangler directly
-npx wrangler deploy
-```
-
 ## Project Structure
 
 ```
 ├── bot.py                 # Main bot application
 ├── test_bot.py            # Comprehensive test suite for validation
 ├── manage-bot.sh          # Management script with virtual environment support
-├── worker.js              # Cloudflare Worker proxy for VPS deployments
-├── wrangler.toml         # Wrangler configuration for worker deployment
-├── package.json          # Node.js dependencies for Wrangler CLI
 ├── requirements.txt       # Python dependencies
 ├── .env                   # Environment configuration
 ├── .env.example          # Configuration template
-└── README.md             # Documentation
+├── cloudflare-worker/     # Optional Cloudflare Worker for VPS deployments
+│   ├── worker.js          # Worker proxy code
+│   ├── wrangler.toml      # Wrangler configuration
+│   ├── package.json       # Node.js dependencies for Wrangler
+│   └── README.md          # Worker-specific documentation
+└── README.md             # Main documentation
 ```
 
 ## Architecture Principles
@@ -282,7 +232,7 @@ LTA_API_URL=https://your-proxy.workers.dev
 
 2. **Cloudflare challenges on VPS**
    - Set `LTA_API_URL` to your Cloudflare Worker URL instead of the direct API
-   - Deploy the Worker using `npm run deploy`
+   - Deploy the Worker using the [Cloudflare Worker setup guide](./cloudflare-worker/README.md)
 
 3. **Bot not responding**
    - Check that `BOT_TOKEN` and `ALLOWED_USER_ID` are correct
