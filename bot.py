@@ -1,10 +1,10 @@
-"""Compatibility facade for the modular ltabot package.
-
-This file re-exports the public API used by tests and external callers, while the
-actual implementation lives under the ltabot/ package following SOLID principles.
+#!/usr/bin/env python3
 """
+LTA Fantasy Bot - Entry Point
 
-from ltabot import *  # noqa: F401,F403
+Self-contained Telegram bot for LTA Fantasy league monitoring.
+The actual implementation is in the ltabot package.
+"""
 
 if __name__ == "__main__":
     from ltabot import main

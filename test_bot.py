@@ -9,12 +9,13 @@ import os
 import asyncio
 import traceback
 from pathlib import Path
+import pytest
 
 # Add current directory to path for bot imports
 sys.path.insert(0, str(Path(__file__).parent))
 
 try:
-    import bot
+    from ltabot import BASE, make_session, fetch_json
     from dotenv import load_dotenv
     load_dotenv()  # Load .env file for testing
 except ImportError as e:
@@ -52,61 +53,58 @@ def test_environment_variables():
     if missing_vars:
         print(f"❌ Missing environment variables: {', '.join(missing_vars)}")
         print("Please check your .env file")
-        return False
-    
-    print("✅ All required environment variables are configured")
-    return True
+        assert False, f"Missing environment variables: {', '.join(missing_vars)}"
+    else:
+        print("✅ All required environment variables are configured")
 
 
+@pytest.mark.asyncio
 async def test_lta_authentication():
     """Test LTA Fantasy API authentication using /users/me endpoint"""
     print("🔐 Testing LTA Fantasy authentication...")
     
-    session = bot.make_session()
+    session = make_session()
     try:
         # Test the user profile endpoint - better than /leagues/active
-        user_data = await bot.fetch_json(session, f'{bot.BASE}/users/me')
+        user_data = await fetch_json(session, f'{BASE}/users/me')
         
-        if user_data and 'data' in user_data:
-            user_info = user_data['data']
-            display_name = user_info.get('riotGameName', 'Unknown')
-            tag_line = user_info.get('riotTagLine', 'Unknown')
-            user_id = user_info.get('id', 'Unknown')[:8] + '...'  # Mask user ID
-            
-            print(f'✅ Authenticated as: {display_name}#{tag_line} (ID: {user_id})')
-            print('✅ LTA Fantasy API authentication successful')
-            return True
-        else:
-            print('❌ Invalid response from /users/me endpoint')
-            return False
+        assert user_data is not None, "No response from LTA API"
+        assert 'data' in user_data, "Invalid response format from /users/me endpoint"
+        
+        user_info = user_data['data']
+        display_name = user_info.get('riotGameName', 'Unknown')
+        tag_line = user_info.get('riotTagLine', 'Unknown')
+        user_id = user_info.get('id', 'Unknown')[:8] + '...'  # Mask user ID
+        
+        print(f'✅ Authenticated as: {display_name}#{tag_line} (ID: {user_id})')
+        print('✅ LTA Fantasy API authentication successful')
             
     except Exception as e:
         error_msg = str(e)
         if '401' in error_msg or 'Unauthorized' in error_msg:
             print('❌ Authentication failed - Session token invalid or expired')
             print('Please update your X_SESSION_TOKEN in .env file')
+            pytest.fail("LTA API authentication failed - invalid session token")
         elif '404' in error_msg:
             print('❌ Endpoint not found - Check if worker supports /users/me')
+            pytest.fail("LTA API endpoint not found")
         else:
             print(f'❌ LTA API authentication issue: {error_msg}')
-        return False
+            pytest.fail(f"LTA API error: {error_msg}")
     finally:
         await session.close()
 
 
+@pytest.mark.asyncio
 async def test_telegram_bot_token():
     """Test Telegram Bot token validity by calling getMe API"""
     print("🤖 Testing Telegram Bot API connection...")
     
     bot_token = os.getenv('BOT_TOKEN')
-    if not bot_token:
-        print("❌ BOT_TOKEN not configured")
-        return False
+    assert bot_token, "BOT_TOKEN not configured"
     
     # Basic token format validation
-    if ':' not in bot_token or len(bot_token.split(':')) != 2:
-        print("❌ BOT_TOKEN format appears invalid (should be ID:SECRET)")
-        return False
+    assert ':' in bot_token and len(bot_token.split(':')) == 2, "BOT_TOKEN format invalid (should be ID:SECRET)"
     
     # Test actual connection to Telegram API using getMe
     import aiohttp
@@ -116,29 +114,26 @@ async def test_telegram_bot_token():
             async with session.get(url) as response:
                 if response.status == 200:
                     data = await response.json()
-                    if data.get('ok'):
-                        bot_info = data.get('result', {})
-                        username = bot_info.get('username', 'Unknown')
-                        first_name = bot_info.get('first_name', 'Unknown')
-                        bot_id = bot_info.get('id', 'Unknown')
-                        
-                        print("✅ Connected to Telegram API successfully")
-                        print(f"✅ Bot: @{username} ({first_name}) - ID: {bot_id}")
-                        return True
-                    else:
-                        print(f"❌ Telegram API returned error: {data.get('description', 'Unknown error')}")
-                        return False
+                    assert data.get('ok'), f"Telegram API returned error: {data.get('description', 'Unknown error')}"
+                    
+                    bot_info = data.get('result', {})
+                    username = bot_info.get('username', 'Unknown')
+                    first_name = bot_info.get('first_name', 'Unknown')
+                    bot_id = bot_info.get('id', 'Unknown')
+                    
+                    print("✅ Connected to Telegram API successfully")
+                    print(f"✅ Bot: @{username} ({first_name}) - ID: {bot_id}")
+                    
                 elif response.status == 401:
                     print("❌ Invalid bot token - Telegram API returned 401 Unauthorized")
                     print("Please check your BOT_TOKEN in .env file")
-                    return False
+                    pytest.fail("Invalid bot token")
                 else:
-                    print(f"❌ Telegram API request failed with status {response.status}")
-                    return False
+                    pytest.fail(f"Telegram API request failed with status {response.status}")
                     
     except Exception as e:
         print(f"❌ Failed to connect to Telegram API: {e}")
-        return False
+        pytest.fail(f"Telegram API connection error: {e}")
 
 
 
@@ -147,7 +142,10 @@ def test_imports():
     print("📦 Testing module imports...")
     
     required_modules = [
+        'os',
+        'sys',
         'aiohttp',
+        'dotenv',
         'asyncio',
         'json',
         'logging'
@@ -163,63 +161,41 @@ def test_imports():
             print(f"  ❌ {module}")
             failed_imports.append(module)
     
-    if failed_imports:
-        print(f"❌ Missing dependencies: {', '.join(failed_imports)}")
-        return False
-    
+    assert not failed_imports, f"Missing dependencies: {', '.join(failed_imports)}"
     print("✅ All required modules imported successfully")
-    return True
 
 
 def test_bot_configuration():
     """Test bot configuration and environment variables"""
     print("⚙️ Testing bot configuration...")
     
-    try:
-        # Check if BASE URL is configured
-        if hasattr(bot, 'BASE') and bot.BASE:
-            print(f"  ✅ Base URL: {bot.BASE}")
-        else:
-            print("  ❌ Base URL not configured")
-            return False
-        
-        # Check for other important configuration
-        config_items = ['BASE', 'make_session']
-        missing_config = []
-        
-        for item in config_items:
-            if not hasattr(bot, item):
-                missing_config.append(item)
-        
-        if missing_config:
-            print(f"  ❌ Missing configuration: {', '.join(missing_config)}")
-            return False
-        
-        print("✅ Bot configuration looks good")
-        return True
-        
-    except Exception as e:
-        print(f"❌ Configuration test failed: {e}")
-        return False
+    # Check if BASE URL is configured
+    assert BASE, "Base URL not configured"
+    print(f"  ✅ Base URL: {BASE}")
+    
+    # Check for other important configuration
+    # These are functions, so we check if they're callable
+    assert callable(make_session), "make_session function not available"
+    assert callable(fetch_json), "fetch_json function not available"
+    
+    print("✅ Bot configuration looks good")
 
 
+@pytest.mark.asyncio
 async def test_session_creation():
     """Test that we can create and close HTTP sessions properly"""
     print("🔗 Testing session management...")
     
-    try:
-        session = bot.make_session()
-        if session:
-            print("  ✅ Session created successfully")
-            await session.close()
-            print("  ✅ Session closed successfully")
-            return True
-        else:
-            print("  ❌ Failed to create session")
-            return False
-    except Exception as e:
-        print(f"❌ Session test failed: {e}")
-        return False
+    session = make_session()
+    assert session is not None, "Failed to create session"
+    print("  ✅ Session created successfully")
+    
+    await session.close()
+    print("  ✅ Session closed successfully")
+
+
+# Note: This file is now configured for pytest usage
+# Run with: pytest test_bot.py -v
 
 
 async def run_all_tests():

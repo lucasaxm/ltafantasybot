@@ -192,83 +192,70 @@ def cleanup_chat_data(chat_id: int):
     WATCH_MESSAGE_IDS.pop(chat_id, None)
     FIRST_POLL_AFTER_RESUME.pop(chat_id, None)
 
-async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
-    logger.info(f"Started watch loop for chat {chat_id}, league '{league}'")
-    save_counter = 0
+async def check_round_status(chat_id: int, league: str, current_round, teams_data, bot) -> bool:
+    """Check round status and handle completion. Returns True if should continue watching."""
+    if current_round is None:
+        await bot.send_message(chat_id, f"❌ <b>Error:</b> No rounds found for league <code>{league}</code>.\nStopped watching.", parse_mode="HTML")
+        return False
+    
+    if not teams_data:
+        round_status = current_round.get('status', 'unknown')
+        round_name = current_round.get('name', 'Unknown Round')
+        
+        if round_status == 'completed':
+            await handle_round_completion(chat_id, league, bot)
+            return False
+        else:
+            await bot.send_message(chat_id, f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.", parse_mode="HTML")
+            return False
+    
+    return True
 
-    is_resumed = FIRST_POLL_AFTER_RESUME.get(chat_id, False)
 
-    while not stop_event.is_set():
+async def handle_round_completion(chat_id: int, league: str, bot):
+    """Handle round completion notifications and cleanup."""
+    if chat_id in WATCH_MESSAGE_IDS:
         try:
-            save_counter += 1
-
-            current_scores, current_ranking, teams_data, current_round = await get_structured_scores(league)
-
-            if current_round is None:
-                await bot.send_message(chat_id, f"❌ <b>Error:</b> No rounds found for league <code>{league}</code>.\nStopped watching.", parse_mode="HTML")
-                break
-            elif not teams_data:
-                round_status = current_round.get('status', 'unknown')
-                round_name = current_round.get('name', 'Unknown Round')
-
-                if round_status == 'completed':
-                    if chat_id in WATCH_MESSAGE_IDS:
-                        try:
-                            await bot.delete_message(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id])
-                        except Exception:
-                            pass
-                    try:
-                        final_msg, _ = await gather_live_scores(league)
-                        final_msg += "\n\n🏁 <b>ROUND COMPLETED!</b>\n<i>Final scores above. Stopped watching.</i>"
-                        await bot.send_message(chat_id, final_msg, parse_mode="HTML")
-                    except Exception as e:
-                        await bot.send_message(chat_id, f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}", parse_mode="HTML")
-                    break
-                else:
-                    await bot.send_message(chat_id, f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.", parse_mode="HTML")
-                    break
-
-            round_id = current_round["id"]
-            current_split_ranking, split_teams_data = await get_structured_split_ranking(league, round_id)
-
-            score_changes = calculate_score_changes(chat_id, current_scores) if not is_resumed else {}
-            split_ranking_changed = check_split_ranking_changed(chat_id, current_split_ranking)
-
-            message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True, score_type="Round")
-
-            if split_ranking_changed and chat_id in LAST_SPLIT_RANKINGS and not is_resumed:
-                await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data)
-
-            await send_or_edit_message(bot, chat_id, message, split_ranking_changed and not is_resumed)
-
-            update_tracking_data(chat_id, current_scores, current_ranking, current_split_ranking, message)
-
-            should_save = (
-                save_counter >= 3 or
-                split_ranking_changed or
-                any(arrow != "" for arrow in score_changes.values())
-            )
-            if should_save:
-                active_chats = list(WATCHERS.keys())
-                write_runtime_state(active_chats)
-                save_counter = 0
-
-            if is_resumed:
-                FIRST_POLL_AFTER_RESUME[chat_id] = False
-                is_resumed = False
-
-        except PermissionError as e:
-            await bot.send_message(chat_id, f"🔐 {e}")
-            break
-        except Exception as e:
-            await bot.send_message(chat_id, f"❌ Watch error: {e}")
-
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=POLL_SECS)
-        except asyncio.TimeoutError:
+            await bot.delete_message(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id])
+        except Exception:
             pass
+    
+    try:
+        final_msg, _ = await gather_live_scores(league)
+        final_msg += "\n\n🏁 <b>ROUND COMPLETED!</b>\n<i>Final scores above. Stopped watching.</i>"
+        await bot.send_message(chat_id, final_msg, parse_mode="HTML")
+    except Exception as e:
+        await bot.send_message(chat_id, f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}", parse_mode="HTML")
 
-    # Cleanup on exit
+
+async def process_score_and_ranking_changes(chat_id: int, league: str, current_round, current_scores, 
+                                          current_split_ranking, split_teams_data, teams_data, 
+                                          is_resumed: bool, bot):
+    """Process score changes and split ranking changes, send notifications."""
+    score_changes = calculate_score_changes(chat_id, current_scores) if not is_resumed else {}
+    split_ranking_changed = check_split_ranking_changed(chat_id, current_split_ranking)
+    
+    message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True, score_type="Round")
+    
+    if split_ranking_changed and chat_id in LAST_SPLIT_RANKINGS and not is_resumed:
+        await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data)
+    
+    await send_or_edit_message(bot, chat_id, message, split_ranking_changed and not is_resumed)
+    
+    return score_changes, split_ranking_changed
+
+
+def should_save_state(save_counter: int, split_ranking_changed: bool, score_changes: dict) -> bool:
+    """Determine if state should be saved based on conditions."""
+    return (
+        save_counter >= 3 or
+        split_ranking_changed or
+        any(arrow != "" for arrow in score_changes.values())
+    )
+
+
+def cleanup_watch_session(chat_id: int):
+    """Clean up all tracking data for a watch session."""
     LAST_SCORES.pop(chat_id, None)
     LAST_RANKINGS.pop(chat_id, None)
     LAST_SPLIT_RANKINGS.pop(chat_id, None)
@@ -276,5 +263,63 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
     FIRST_POLL_AFTER_RESUME.pop(chat_id, None)
     WATCHERS.pop(chat_id, None)
     write_runtime_state(list(WATCHERS.keys()))
-    logger.info(f"Watch loop stopped for chat {chat_id}")
+
+
+async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
+    """Main watch loop - orchestrates polling and notifications."""
+    logger.info(f"Started watch loop for chat {chat_id}, league '{league}'")
+    save_counter = 0
+    is_resumed = FIRST_POLL_AFTER_RESUME.get(chat_id, False)
+
+    try:
+        while not stop_event.is_set():
+            try:
+                save_counter += 1
+
+                current_scores, current_ranking, teams_data, current_round = await get_structured_scores(league)
+                
+                # Check if round is valid and should continue
+                if not await check_round_status(chat_id, league, current_round, teams_data, bot):
+                    break
+
+                round_id = current_round["id"]
+                current_split_ranking, split_teams_data = await get_structured_split_ranking(league, round_id)
+
+                # Process changes and send notifications
+                score_changes, split_ranking_changed = await process_score_and_ranking_changes(
+                    chat_id, league, current_round, current_scores, current_split_ranking,
+                    split_teams_data, teams_data, is_resumed, bot
+                )
+
+                # Update tracking data
+                update_tracking_data(chat_id, current_scores, current_ranking, current_split_ranking, 
+                                   fmt_standings(league, current_round, teams_data, score_changes, 
+                                               include_timestamp=True, score_type="Round"))
+
+                # Save state if needed
+                if should_save_state(save_counter, split_ranking_changed, score_changes):
+                    write_runtime_state(list(WATCHERS.keys()))
+                    save_counter = 0
+
+                # Reset resume flag after first poll
+                if is_resumed:
+                    FIRST_POLL_AFTER_RESUME[chat_id] = False
+                    is_resumed = False
+
+            except PermissionError as e:
+                await bot.send_message(chat_id, f"🔐 {e}")
+                break
+            except Exception as e:
+                await bot.send_message(chat_id, f"❌ Watch error: {e}")
+
+            # Wait for next poll or stop event
+            try:
+                await asyncio.wait_for(stop_event.wait(), timeout=POLL_SECS)
+            except asyncio.TimeoutError:
+                pass
+
+    finally:
+        # Always cleanup on exit
+        cleanup_watch_session(chat_id)
+        logger.info(f"Watch loop stopped for chat {chat_id}")
 

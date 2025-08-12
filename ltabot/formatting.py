@@ -23,7 +23,14 @@ def fmt_standings(
     )
 
     def medal(n: int) -> str:
-        return "🥇" if n == 1 else ("🥈" if n == 2 else ("🥉" if n == 3 else f"{n:>2}."))
+        if n == 1:
+            return "🥇"
+        elif n == 2:
+            return "🥈"
+        elif n == 3:
+            return "🥉"
+        else:
+            return f"{n:>2}."
 
     lines: List[str] = []
     for r, t, o, p in rows:
@@ -101,7 +108,14 @@ def fmt_team_details(team_info: Dict[str, Any], round_obj: Dict[str, Any], roste
     pre_budget = round_roster.get("preRoundBudget", 0)
 
     def get_rank_medal(r: int) -> str:
-        return "🥇" if r == 1 else ("🥈" if r == 2 else ("🥉" if r == 3 else f"#{r}"))
+        if r == 1:
+            return "🥇"
+        elif r == 2:
+            return "🥈"
+        elif r == 3:
+            return "🥉"
+        else:
+            return f"#{r}"
 
     rank_display = get_rank_medal(rank if isinstance(rank, int) else 0)
 

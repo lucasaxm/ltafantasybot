@@ -28,8 +28,39 @@ from .commands import (
 
 
 async def startup_health_check():
-    # Defer detailed health check to legacy bot for simplicity; export stub here
-    return True
+    """Perform health check on bot startup"""
+    from .config import BASE, X_SESSION_TOKEN, logger
+    from .http import make_session, fetch_json
+    
+    logger.info("🏥 Running startup health check...")
+    
+    try:
+        # Test LTA Fantasy authentication
+        async with make_session() as session:
+            user_data = await fetch_json(session, f'{BASE}/users/me')
+            
+            if user_data and 'data' in user_data:
+                user_info = user_data['data']
+                display_name = user_info.get('riotGameName', 'Unknown')
+                tag_line = user_info.get('riotTagLine', 'Unknown')
+                
+                logger.info(f"✅ Authenticated as: {display_name}#{tag_line}")
+                logger.info("✅ LTA Fantasy API authentication successful")
+                return True
+            else:
+                logger.error("❌ Invalid response from /users/me endpoint")
+                return False
+                
+    except Exception as e:
+        error_msg = str(e)
+        if '401' in error_msg or 'Unauthorized' in error_msg:
+            logger.error("❌ LTA Authentication failed - Session token invalid or expired")
+            logger.error("Use /auth <token> command to update your session token")
+        elif '404' in error_msg:
+            logger.error("❌ /users/me endpoint not found - Check worker configuration")
+        else:
+            logger.error(f"❌ LTA API health check failed: {error_msg}")
+        return False
 
 
 def main():
