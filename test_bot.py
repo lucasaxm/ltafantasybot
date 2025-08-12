@@ -94,9 +94,9 @@ async def test_lta_authentication():
         await session.close()
 
 
-def test_telegram_bot_token():
-    """Test Telegram Bot token validity (without actually connecting)"""
-    print("🤖 Testing Telegram Bot configuration...")
+async def test_telegram_bot_token():
+    """Test Telegram Bot token validity by calling getMe API"""
+    print("🤖 Testing Telegram Bot API connection...")
     
     bot_token = os.getenv('BOT_TOKEN')
     if not bot_token:
@@ -108,40 +108,38 @@ def test_telegram_bot_token():
         print("❌ BOT_TOKEN format appears invalid (should be ID:SECRET)")
         return False
     
-    token_parts = bot_token.split(':')
-    bot_id = token_parts[0]
-    
+    # Test actual connection to Telegram API using getMe
+    import aiohttp
     try:
-        # Bot ID should be numeric
-        int(bot_id)
-        print(f"✅ Bot token format valid (Bot ID: {bot_id})")
-        print("✅ Telegram Bot token configuration looks good")
-        return True
-    except ValueError:
-        print("❌ Bot ID in token should be numeric")
+        async with aiohttp.ClientSession() as session:
+            url = f"https://api.telegram.org/bot{bot_token}/getMe"
+            async with session.get(url) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('ok'):
+                        bot_info = data.get('result', {})
+                        username = bot_info.get('username', 'Unknown')
+                        first_name = bot_info.get('first_name', 'Unknown')
+                        bot_id = bot_info.get('id', 'Unknown')
+                        
+                        print("✅ Connected to Telegram API successfully")
+                        print(f"✅ Bot: @{username} ({first_name}) - ID: {bot_id}")
+                        return True
+                    else:
+                        print(f"❌ Telegram API returned error: {data.get('description', 'Unknown error')}")
+                        return False
+                elif response.status == 401:
+                    print("❌ Invalid bot token - Telegram API returned 401 Unauthorized")
+                    print("Please check your BOT_TOKEN in .env file")
+                    return False
+                else:
+                    print(f"❌ Telegram API request failed with status {response.status}")
+                    return False
+                    
+    except Exception as e:
+        print(f"❌ Failed to connect to Telegram API: {e}")
         return False
 
-
-async def test_basic_api_connectivity():
-    """Test basic API connectivity (fallback test)"""
-    print("🌐 Testing basic API connectivity...")
-    
-    session = bot.make_session()
-    try:
-        # Test a simple endpoint as fallback
-        await bot.fetch_json(session, f'{bot.BASE}/leagues/active')
-        print('✅ Basic API connectivity working')
-        return True
-    except Exception as e:
-        error_msg = str(e)
-        if 'League not found' in error_msg or '404' in error_msg:
-            print('✅ Worker proxy working (endpoint/token issue is normal)')
-            return True
-        else:
-            print(f'❌ Basic API connectivity issue: {error_msg}')
-            return False
-    finally:
-        await session.close()
 
 
 def test_imports():
@@ -233,10 +231,9 @@ async def run_all_tests():
         ("Environment Variables Test", test_environment_variables, False),  # Synchronous
         ("Import Test", test_imports, False),  # Synchronous
         ("Bot Configuration Test", test_bot_configuration, False),  # Synchronous
-        ("Telegram Bot Token Test", test_telegram_bot_token, False),  # Synchronous
+        ("Telegram Bot Token Test", test_telegram_bot_token, True),  # Async
         ("Session Management Test", test_session_creation, True),  # Async
         ("LTA Authentication Test", test_lta_authentication, True),  # Async
-        ("Basic API Connectivity Test", test_basic_api_connectivity, True),  # Async
     ]
     
     results = []

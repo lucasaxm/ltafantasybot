@@ -32,10 +32,16 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Reduce telegram library verbosity to avoid getUpdates spam
-logging.getLogger("httpx").setLevel(logging.WARNING)
-logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING) 
-logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)
-logging.getLogger("telegram.bot").setLevel(logging.WARNING)
+# These are the main sources of debug noise
+logging.getLogger("httpcore").setLevel(logging.WARNING)  # HTTP connection debug messages
+logging.getLogger("httpcore.connection").setLevel(logging.WARNING)  # TCP connection details
+logging.getLogger("httpcore.http11").setLevel(logging.WARNING)  # HTTP/1.1 protocol details
+logging.getLogger("httpx").setLevel(logging.WARNING)  # HTTP client library
+logging.getLogger("telegram.ext.ExtBot").setLevel(logging.WARNING)  # Bot API calls and getUpdates spam
+logging.getLogger("telegram.ext.Updater").setLevel(logging.WARNING)  # Update polling
+logging.getLogger("telegram.ext.Application").setLevel(logging.WARNING)  # Application lifecycle
+logging.getLogger("telegram.bot").setLevel(logging.WARNING)  # General bot operations
+logging.getLogger("asyncio").setLevel(logging.WARNING)  # Async event loop details
 
 # ====== Configuration ======
 class Config:
