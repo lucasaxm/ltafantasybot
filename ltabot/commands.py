@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import asyncio
+from typing import Optional, Tuple
 from telegram import Update
 from telegram.ext import ContextTypes
 
@@ -9,12 +9,12 @@ from .watchers import (
     WATCHERS,
     get_structured_scores,
     gather_live_scores,
-    watch_loop,
+    start_watcher,
 )
 from .http import make_session
 from .api import get_rounds
 from .storage import get_group_league, set_group_league
-from .config import POLL_SECS
+from .config import logger
 
 # Constants for common messages
 NO_LEAGUE_ATTACHED_MSG = "❌ No league attached to this group. Use <code>/setleague &lt;league_slug&gt;</code> first."
@@ -169,12 +169,9 @@ async def watch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ Could not check league status: {e}")
         return
 
-    stop_event = asyncio.Event()
-    async def runner():
-        await watch_loop(chat_id, league, context.bot, stop_event)
-    WATCHERS[chat_id] = asyncio.create_task(runner())
+    start_watcher(chat_id, league, context.bot)
     await update.message.reply_text(
-        f"👀 Watching <code>{league}</code> every {POLL_SECS}s. Use /unwatch to stop.", parse_mode="HTML"
+        f"👀 Watching <code>{league}</code> with dynamic intervals by phase. Use /unwatch to stop.", parse_mode="HTML"
     )
 
 
@@ -200,13 +197,10 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"✅ Already watching <code>{league}</code>!", parse_mode="HTML")
         return
 
-    stop_event = asyncio.Event()
-    async def runner():
-        await watch_loop(chat_id, league, context.bot, stop_event)
-    WATCHERS[chat_id] = asyncio.create_task(runner())
+    start_watcher(chat_id, league, context.bot)
 
     await update.message.reply_text(
-        f"👀 Started watching <code>{league}</code> every {POLL_SECS}s!\nUse /stopwatch to stop.",
+        f"👀 Started watching <code>{league}</code> with dynamic intervals by phase!\nUse /stopwatch to stop.",
         parse_mode="HTML",
     )
 
@@ -221,6 +215,11 @@ async def stopwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if chat_id in WATCHERS:
         WATCHERS[chat_id].cancel()
         del WATCHERS[chat_id]
+        try:
+            from .storage import write_runtime_state
+            write_runtime_state(list(WATCHERS.keys()))
+        except Exception:
+            pass
         await update.message.reply_text("🛑 Stopped watching.")
     else:
         await update.message.reply_text("❓ Not currently watching anything.")
@@ -246,53 +245,133 @@ async def auth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Token updated in memory. Try /scores again.")
 
 
-async def team_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard_read(update, context):
-        return
+async def _handle_market_open_roster_fallback(session, league, search_term, search_type, update):
+    """Handle roster fetch during market_open by falling back to previous round."""
+    from .api import find_team_by_name_or_owner, get_team_round_roster, pick_previous_round, get_rounds
+    from .formatting import fmt_team_details
+    
+    rounds = await get_rounds(session, league)
+    latest_round = [r for r in rounds if r.get("status") == "market_open"]
+    
+    if latest_round:
+        latest_round = latest_round[0]
+        previous_round = pick_previous_round(rounds, latest_round)
+        
+        if previous_round:
+            # Try with previous round
+            result = await find_team_by_name_or_owner(session, league, search_term, search_type)
+            if result:
+                team_info = result["team_info"]
+                team_id = team_info["userTeam"]["id"]
+                
+                try:
+                    roster_data = await get_team_round_roster(session, previous_round["id"], team_id)
+                    message = fmt_team_details(team_info, previous_round, roster_data)
+                    message = "⚠️ <b>Mercado está aberto</b>; mostrando roster da rodada anterior e preços.\n\n" + message
+                    await update.message.reply_text(message, parse_mode="HTML")
+                    return True
+                except Exception:
+                    pass  # Fall through to normal error handling
+    
+    return False
 
+
+async def _get_team_command_params(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Optional[Tuple[str, str]]:
+    """Get league and search_term for team command. Returns None if validation fails."""
     chat = update.effective_chat
 
     if chat.type == "private":
         if len(context.args) < 2:
             await update.message.reply_text("Usage: /team <league_slug> <team_name>")
-            return
-        league = context.args[0].strip()
-        search_term = " ".join(context.args[1:]).strip()
+            return None
+        return context.args[0].strip(), " ".join(context.args[1:]).strip()
     else:
         if not context.args:
             await update.message.reply_text("Usage: /team <team_name>")
-            return
+            return None
         league = get_group_league(chat.id)
         if not league:
-            await update.message.reply_text(
-                NO_LEAGUE_ATTACHED_MSG,
-                parse_mode="HTML",
-            )
-            return
-        search_term = " ".join(context.args).strip()
+            await update.message.reply_text(NO_LEAGUE_ATTACHED_MSG, parse_mode="HTML")
+            return None
+        return league, " ".join(context.args).strip()
 
+
+async def team_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # Delegate to generic lookup (mode=team)
+    await _generic_team_lookup(update, context, mode="team")
+
+
+async def _generic_team_lookup(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str):
+    """Unified handler for /team and /owner commands with market_open fallback."""
+    if not await guard_read(update, context):
+        return
+    league, search_term = await _parse_lookup_params(update, context, mode)
+    if not league:
+        return
+    await _perform_lookup_and_reply(update, league, search_term, mode)
+
+
+async def _parse_lookup_params(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> Tuple[Optional[str], Optional[str]]:
+    chat = update.effective_chat
+    if chat.type == "private":
+        if len(context.args) < 2:
+            await update.message.reply_text(f"Usage: /{mode} <league_slug> <{mode}_name>")
+            return None, None
+        return context.args[0].strip(), " ".join(context.args[1:]).strip()
+    if not context.args:
+        await update.message.reply_text(f"Usage: /{mode} <{mode}_name>")
+        return None, None
+    league = get_group_league(chat.id)
+    if not league:
+        await update.message.reply_text(NO_LEAGUE_ATTACHED_MSG, parse_mode="HTML")
+        return None, None
+    return league, " ".join(context.args).strip()
+
+
+async def _perform_lookup_and_reply(update: Update, league: str, search_term: str, mode: str):
+    from .api import find_team_by_name_or_owner, get_team_round_roster
+    from .formatting import fmt_team_details
+    from .api import get_rounds, pick_previous_round
     try:
-        from .api import find_team_by_name_or_owner, get_team_round_roster
-        from .formatting import fmt_team_details
-
         async with make_session() as session:
-            result = await find_team_by_name_or_owner(session, league, search_term, "team")
+            result = await find_team_by_name_or_owner(session, league, search_term, mode)
             if not result:
+                noun = "Team" if mode == "team" else "Owner"
                 await update.message.reply_text(
-                    f"❌ Team '<code>{search_term}</code>' not found in league '<code>{league}</code>'.",
+                    f"❌ {noun} '<code>{search_term}</code>' not found in league '<code>{league}</code>'.",
                     parse_mode="HTML",
                 )
                 return
-
             team_info = result["team_info"]
-            round_obj = result["round_obj"]
-            round_id = result["round_id"]
+            base_round_obj = result["round_obj"]
             team_id = team_info["userTeam"]["id"]
 
-            roster_data = await get_team_round_roster(session, round_id, team_id)
-            message = fmt_team_details(team_info, round_obj, roster_data)
+            # Proactive previous-round selection during market_open before any roster fetch
+            use_round_obj = base_round_obj
+            proactive_note = ""
+            if base_round_obj.get("status") == "market_open":
+                try:
+                    rounds = await get_rounds(session, league)
+                    previous_round = pick_previous_round(rounds, base_round_obj)
+                    if previous_round:
+                        use_round_obj = previous_round
+                        proactive_note = "⚠️ <b>Mercado aberto</b>; mostrando roster da rodada anterior.\n\n"
+                except Exception:
+                    pass  # Fall back silently
 
-            await update.message.reply_text(message, parse_mode="HTML")
+            round_id = use_round_obj["id"]
+
+            try:
+                roster_data = await get_team_round_roster(session, round_id, team_id)
+                message = fmt_team_details(team_info, use_round_obj, roster_data)
+                if proactive_note:
+                    message = proactive_note + message
+                await update.message.reply_text(message, parse_mode="HTML")
+            except PermissionError:
+                # As a safety net, attempt legacy fallback path
+                if await _handle_market_open_roster_fallback(session, league, search_term, mode, update):
+                    return
+                raise
     except PermissionError as e:
         await update.message.reply_text(f"🔐 {e}")
     except Exception as e:
@@ -300,53 +379,36 @@ async def team_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await guard_read(update, context):
-        return
+    await _generic_team_lookup(update, context, mode="owner")
 
+
+async def watchstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Diagnostic command to report current watch state for this chat."""
     chat = update.effective_chat
-
-    if chat.type == "private":
-        if len(context.args) < 2:
-            await update.message.reply_text("Usage: /owner <league_slug> <owner_name>")
-            return
-        league = context.args[0].strip()
-        search_term = " ".join(context.args[1:]).strip()
-    else:
-        if not context.args:
-            await update.message.reply_text("Usage: /owner <owner_name>")
-            return
-        league = get_group_league(chat.id)
-        if not league:
-            await update.message.reply_text(
-                NO_LEAGUE_ATTACHED_MSG,
-                parse_mode="HTML",
-            )
-            return
-        search_term = " ".join(context.args).strip()
-
-    try:
-        from .api import find_team_by_name_or_owner, get_team_round_roster
-        from .formatting import fmt_team_details
-
-        async with make_session() as session:
-            result = await find_team_by_name_or_owner(session, league, search_term, "owner")
-            if not result:
-                await update.message.reply_text(
-                    f"❌ Owner '<code>{search_term}</code>' not found in league '<code>{league}</code>'.",
-                    parse_mode="HTML",
-                )
-                return
-
-            team_info = result["team_info"]
-            round_obj = result["round_obj"]
-            round_id = result["round_id"]
-            team_id = team_info["userTeam"]["id"]
-
-            roster_data = await get_team_round_roster(session, round_id, team_id)
-            message = fmt_team_details(team_info, round_obj, roster_data)
-
-            await update.message.reply_text(message, parse_mode="HTML")
-    except PermissionError as e:
-        await update.message.reply_text(f"🔐 {e}")
-    except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+    chat_id = chat.id
+    from .state import WATCHER_PHASES, STALE_COUNTERS, CURRENT_BACKOFF, REMINDER_FLAGS
+    if chat_id not in WATCHER_PHASES:
+        await update.message.reply_text("ℹ️ Não há watcher ativo neste chat.")
+        return
+    phase = WATCHER_PHASES.get(chat_id)
+    stale = STALE_COUNTERS.get(chat_id, 0)
+    backoff = CURRENT_BACKOFF.get(chat_id, 1.0)
+    # Pick the most recent reminder key if any
+    reminder_summary = "—"
+    flags_dict = REMINDER_FLAGS.get(chat_id, {})
+    if flags_dict:
+        try:
+            # Use max by lexical which includes round id; acceptable heuristic
+            latest_key = sorted(flags_dict.keys())[-1]
+            flags = flags_dict[latest_key]
+            reminder_summary = ", ".join(f"{k}:{'✅' if v else '❌'}" for k, v in flags.items())
+        except Exception:
+            pass
+    msg = (
+        f"🔍 <b>Status do Watcher</b>\n"
+        f"Fase: <b>{phase.value}</b>\n"
+        f"Stale polls: {stale}\n"
+        f"Backoff: {backoff:.2f}x\n"
+        f"Reminders: {reminder_summary}"
+    )
+    await update.message.reply_text(msg, parse_mode="HTML")

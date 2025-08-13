@@ -66,9 +66,48 @@ async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug
         team_name = item["userTeam"]["name"].lower()
         owner_name = (item["userTeam"].get("ownerName") or "").lower()
 
-        if search_type == "team" and search_term_lower in team_name:
-            return {"team_info": item, "round_obj": round_obj, "round_id": round_id}
-        elif search_type == "owner" and search_term_lower in owner_name:
+        if ((search_type == "team" and search_term_lower in team_name) or 
+            (search_type == "owner" and search_term_lower in owner_name)):
             return {"team_info": item, "round_obj": round_obj, "round_id": round_id}
 
     return None
+
+
+def pick_previous_round(rounds: List[Dict[str, Any]], current_round: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Pick the previous round relative to the current round."""
+    current_index = current_round.get("indexInSplit", -1)
+    if current_index <= 1:  # No previous round if we're at index 1 or invalid
+        return None
+    
+    # Look for round with indexInSplit = current_index - 1
+    for round_obj in rounds:
+        if round_obj.get("indexInSplit") == current_index - 1:
+            return round_obj
+    
+    return None
+
+
+def determine_phase_from_round(latest_round: Optional[Dict[str, Any]]) -> str:
+    """Determine the appropriate watcher phase based on the latest round status.
+
+    Returns lowercase enum values matching WatcherPhase.value to avoid mismatches.
+    Fallback to 'pre_market' if unknown.
+    """
+    if not latest_round:
+        return "pre_market"
+
+    status = latest_round.get("status", "unknown")
+
+    if status == "in_progress":
+        return "live"
+    if status == "market_open":
+        return "market_open"
+    # completed, upcoming, or any other status
+    return "pre_market"
+
+
+def get_market_close_time(latest_round: Optional[Dict[str, Any]]) -> Optional[str]:
+    """Get the market close time from the round object."""
+    if not latest_round:
+        return None
+    return latest_round.get("marketClosesAt")

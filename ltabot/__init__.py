@@ -40,7 +40,6 @@ from .storage import (
     get_group_league,
     set_group_league,
     GROUP_SETTINGS,
-    WATCH_MESSAGE_IDS,
 )
 from .watchers import (
     gather_live_scores,
@@ -60,6 +59,7 @@ from .watchers import (
     LAST_SCORES,
     LAST_RANKINGS,
     LAST_SPLIT_RANKINGS,
+    WATCH_MESSAGE_IDS,
     LAST_SENT_HASH,
     FIRST_POLL_AFTER_RESUME,
 )
@@ -96,13 +96,13 @@ __all__ = [
     "fmt_standings", "fmt_team_details", "format_player_section", "format_games_details", "hash_payload",
     # Storage
     "load_group_settings", "save_group_settings", "load_runtime_state", "save_runtime_state", "get_active_chats_to_resume",
-    "get_group_league", "set_group_league", "GROUP_SETTINGS", "WATCH_MESSAGE_IDS",
+    "get_group_league", "set_group_league", "GROUP_SETTINGS",
     # Watchers
     "gather_live_scores", "get_split_ranking", "get_round_scores", "get_structured_scores", "get_structured_split_ranking",
     "calculate_score_changes", "check_ranking_changed", "check_split_ranking_changed",
     "send_ranking_change_notification", "send_split_ranking_change_notification", "send_or_edit_message",
     "update_tracking_data", "cleanup_chat_data",
-    "WATCHERS", "LAST_SCORES", "LAST_RANKINGS", "LAST_SPLIT_RANKINGS", "LAST_SENT_HASH", "FIRST_POLL_AFTER_RESUME",
+    "WATCHERS", "LAST_SCORES", "LAST_RANKINGS", "LAST_SPLIT_RANKINGS", "WATCH_MESSAGE_IDS", "LAST_SENT_HASH", "FIRST_POLL_AFTER_RESUME",
     # Auth / Commands / App
     "is_group_member", "is_group_admin", "is_authorized_admin", "is_authorized_read", "guard_admin", "guard_read",
     "start_cmd", "scores_cmd", "setleague_cmd", "getleague_cmd", "watch_cmd", "startwatch_cmd", "stopwatch_cmd", "unwatch_cmd",

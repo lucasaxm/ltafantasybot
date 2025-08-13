@@ -10,10 +10,7 @@ from .state import (
     GROUP_SETTINGS,
     GROUP_SETTINGS_FILE,
     RUNTIME_STATE_FILE,
-    LAST_SCORES,
-    LAST_RANKINGS,
-    LAST_SPLIT_RANKINGS,
-    WATCH_MESSAGE_IDS,
+    WatcherPhase,
 )
 
 
@@ -42,34 +39,73 @@ def save_group_settings() -> None:
 
 
 def load_runtime_state() -> None:
-    global LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS
     try:
         if os.path.exists(RUNTIME_STATE_FILE):
             with open(RUNTIME_STATE_FILE, "r") as f:
                 state = json.load(f)
-            LAST_SCORES = {int(k): v for k, v in state.get("last_scores", {}).items()}
-            LAST_RANKINGS = {int(k): v for k, v in state.get("last_rankings", {}).items()}
-            LAST_SPLIT_RANKINGS = {int(k): v for k, v in state.get("last_split_rankings", {}).items()}
-            WATCH_MESSAGE_IDS = {int(k): v for k, v in state.get("watch_message_ids", {}).items()}
-            logger.info(f"Loaded runtime state for {len(LAST_SCORES)} chats")
+            
+            # Use function-level imports to avoid module isolation issues
+            from .watchers import (
+                LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
+                WATCHER_PHASES, REMINDER_FLAGS, STALE_COUNTERS, CURRENT_BACKOFF, WatcherPhase
+            )
+            
+            # Clear and update the actual state variables
+            LAST_SCORES.clear()
+            LAST_SCORES.update({int(k): v for k, v in state.get("last_scores", {}).items()})
+            
+            LAST_RANKINGS.clear()
+            LAST_RANKINGS.update({int(k): v for k, v in state.get("last_rankings", {}).items()})
+            
+            LAST_SPLIT_RANKINGS.clear()
+            LAST_SPLIT_RANKINGS.update({int(k): v for k, v in state.get("last_split_rankings", {}).items()})
+            
+            WATCH_MESSAGE_IDS.clear()
+            WATCH_MESSAGE_IDS.update({int(k): v for k, v in state.get("watch_message_ids", {}).items()})
+            
+            # Load phase-based state
+            phases_data = state.get("watcher_phases", {})
+            WATCHER_PHASES.clear()
+            WATCHER_PHASES.update({int(k): WatcherPhase(v) for k, v in phases_data.items()})
+            
+            REMINDER_FLAGS.clear()
+            REMINDER_FLAGS.update({int(k): v for k, v in state.get("reminder_flags", {}).items()})
+            
+            STALE_COUNTERS.clear()
+            STALE_COUNTERS.update({int(k): v for k, v in state.get("stale_counters", {}).items()})
+            
+            CURRENT_BACKOFF.clear()
+            CURRENT_BACKOFF.update({int(k): v for k, v in state.get("current_backoff", {}).items()})
+            
+            active_chats_count = len(state.get("active_chats", []))
+            logger.info(f"Loaded runtime state for {active_chats_count} chats")
+            logger.debug(f"Loaded WATCHER_PHASES: {WATCHER_PHASES}")
+            logger.debug(f"Loaded REMINDER_FLAGS: {REMINDER_FLAGS}")
         else:
             logger.info("No existing runtime state file found")
     except Exception as e:
         logger.error(f"Could not load runtime state: {e}")
-        LAST_SCORES = {}
-        LAST_RANKINGS = {}
-        LAST_SPLIT_RANKINGS = {}
-        WATCH_MESSAGE_IDS = {}
+        logger.debug(f"Load error details: {type(e).__name__}: {str(e)}")
 
 
 def save_runtime_state() -> None:
     try:
+        # Use function-level imports to avoid module isolation issues
+        from .watchers import (
+            LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
+            WATCHER_PHASES, REMINDER_FLAGS, STALE_COUNTERS, CURRENT_BACKOFF
+        )
+        
         # WATCHERS list is maintained in watchers module; defer active_chats collection there
         state = {
             "last_scores": {str(k): v for k, v in LAST_SCORES.items()},
             "last_rankings": {str(k): v for k, v in LAST_RANKINGS.items()},
             "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
+            "watcher_phases": {str(k): v.value for k, v in WATCHER_PHASES.items()},
+            "reminder_flags": {str(k): v for k, v in REMINDER_FLAGS.items()},
+            "stale_counters": {str(k): v for k, v in STALE_COUNTERS.items()},
+            "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
             "last_updated": datetime.now().isoformat(),
         }
         with open(RUNTIME_STATE_FILE, "w") as f:
@@ -80,17 +116,35 @@ def save_runtime_state() -> None:
 
 
 def write_runtime_state(active_chats: List[int]) -> None:
+    # Import state variables at function level to ensure we get the current module's copies
+    from .watchers import (
+        LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
+        WATCHER_PHASES, REMINDER_FLAGS, STALE_COUNTERS, CURRENT_BACKOFF
+    )
+    
     try:
+        # Debug logging to see what state variables contain
+        logger.debug(f"write_runtime_state called with active_chats: {active_chats}")
+        logger.debug(f"WATCHER_PHASES content: {WATCHER_PHASES}")
+        logger.debug(f"REMINDER_FLAGS content: {REMINDER_FLAGS}")
+        logger.debug(f"STALE_COUNTERS content: {STALE_COUNTERS}")
+        logger.debug(f"CURRENT_BACKOFF content: {CURRENT_BACKOFF}")
+        
         state = {
             "active_chats": list(active_chats),
             "last_scores": {str(k): v for k, v in LAST_SCORES.items()},
             "last_rankings": {str(k): v for k, v in LAST_RANKINGS.items()},
             "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
+            "watcher_phases": {str(k): v.value for k, v in WATCHER_PHASES.items()},
+            "reminder_flags": {str(k): v for k, v in REMINDER_FLAGS.items()},
+            "stale_counters": {str(k): v for k, v in STALE_COUNTERS.items()},
+            "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
             "last_updated": datetime.now().isoformat(),
         }
         with open(RUNTIME_STATE_FILE, "w") as f:
             json.dump(state, f, indent=2)
+        logger.debug(f"Runtime state saved successfully with watcher_phases: {state['watcher_phases']}")
     except Exception as e:
         logger.error(f"Could not save runtime state: {e}")
 

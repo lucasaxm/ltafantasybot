@@ -12,7 +12,7 @@ from .storage import (
     get_active_chats_to_resume,
     get_group_league,
 )
-from .watchers import WATCHERS, watch_loop, FIRST_POLL_AFTER_RESUME
+from .watchers import WATCHERS
 from .commands import (
     start_cmd,
     scores_cmd,
@@ -25,6 +25,7 @@ from .commands import (
     auth_cmd,
     team_cmd,
     owner_cmd,
+    watchstatus_cmd,
 )
 
 
@@ -103,7 +104,9 @@ def main():
         BotCommand("stopwatch", "Stop monitoring"),
     ]
 
-    async def resume_watchers(application: Application) -> None:
+    def resume_watchers(application: Application) -> None:
+        from .watchers import start_watcher
+        
         chats_to_resume = get_active_chats_to_resume()
         if not chats_to_resume:
             return
@@ -111,11 +114,8 @@ def main():
             league = get_group_league(chat_id)
             if not league:
                 continue
-            stop_event = asyncio.Event()
-            async def runner():
-                await watch_loop(chat_id, league, application.bot, stop_event)
-            FIRST_POLL_AFTER_RESUME[chat_id] = True
-            WATCHERS[chat_id] = asyncio.create_task(runner())
+            # Use the new state machine watcher
+            start_watcher(chat_id, league, application.bot)
 
     async def post_init(application: Application) -> None:
         try:
@@ -128,7 +128,7 @@ def main():
             logger.warning("⚠️ Bot will continue but commands may not be visible in Telegram")
         
         await asyncio.sleep(2)
-        await resume_watchers(application)
+        resume_watchers(application)
 
     app.post_init = post_init
 
@@ -136,6 +136,7 @@ def main():
     app.add_handler(CommandHandler("scores", scores_cmd))
     app.add_handler(CommandHandler("team", team_cmd))
     app.add_handler(CommandHandler("owner", owner_cmd))
+    app.add_handler(CommandHandler("watchstatus", watchstatus_cmd))
     app.add_handler(CommandHandler("setleague", setleague_cmd))
     app.add_handler(CommandHandler("getleague", getleague_cmd))
     app.add_handler(CommandHandler("startwatch", startwatch_cmd))

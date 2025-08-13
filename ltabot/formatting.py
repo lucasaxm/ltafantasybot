@@ -186,3 +186,122 @@ def format_games_details(games: List[Dict[str, Any]]) -> str:
 
 def hash_payload(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def format_brt_time(utc_time_str: str) -> str:
+    """Convert UTC time string to BRT time string using America/Sao_Paulo timezone."""
+    try:
+        from datetime import datetime, timezone, timedelta
+        
+        # Try to use zoneinfo for proper DST handling
+        try:
+            from zoneinfo import ZoneInfo
+            # Parse UTC time
+            utc_time = datetime.fromisoformat(utc_time_str.replace("Z", "+00:00"))
+            
+            # Convert to America/Sao_Paulo timezone (handles DST automatically)
+            sao_paulo_tz = ZoneInfo("America/Sao_Paulo")
+            brt_time = utc_time.astimezone(sao_paulo_tz)
+            
+            return brt_time.strftime("%Y-%m-%d %H:%M BRT")
+        except ImportError:
+            # Fallback to fixed UTC-3 if zoneinfo is not available
+            pass
+        
+        # Parse UTC time
+        utc_time = datetime.fromisoformat(utc_time_str.replace("Z", "+00:00"))
+        
+        # Convert to BRT (UTC-3)
+        brt_offset = timedelta(hours=-3)
+        brt_tz = timezone(brt_offset)
+        brt_time = utc_time.astimezone(brt_tz)
+        
+        return brt_time.strftime("%Y-%m-%d %H:%M BRT")
+    except Exception:
+        return utc_time_str  # Fallback to original
+
+
+def _build_team_section(team_name: str, owner_name: str, pre_budget: float, 
+                       post_budget: float, player_changes: List[Tuple[str, str, float, float]]) -> str:
+    """Build individual team section for market open notification."""
+    budget_delta = post_budget - pre_budget
+    delta_sign = "+" if budget_delta >= 0 else ""
+    delta_text = f"({delta_sign}{budget_delta:.1f})" if budget_delta != 0 else ""
+    
+    section = (
+        f"• <b>{_escape_html(team_name)}</b> ({_escape_html(owner_name)}): "
+        f"{pre_budget:.1f} → {post_budget:.1f} {delta_text}"
+    )
+    
+    # Add collapsible player details if there are price changes
+    if player_changes:
+        player_details = []
+        for role, player_name, pre_price, post_price in player_changes:
+            price_delta = post_price - pre_price
+            delta_sign = "+" if price_delta >= 0 else ""
+            delta_text = f" ({delta_sign}{price_delta:.1f})" if price_delta != 0 else ""
+            player_details.append(f"• {role} - {_escape_html(player_name)}: {pre_price:.1f} → {post_price:.1f}{delta_text}")
+        
+        if player_details:
+            section += "\n<blockquote expandable>\n" + "\n".join(player_details) + "\n</blockquote>"
+    
+    return section
+
+
+def fmt_manual_split_ranking(league_slug: str, completed_round: Dict[str, Any], 
+                            split_totals: List[Tuple[str, str, float]]) -> str:
+    """Format the manual split ranking computed after round completion."""
+    
+    title = (
+        f"🏆 <b>{_escape_html(league_slug)}</b>\n"
+        f"📊 <b>Split (acumulado)</b> após {_escape_html(completed_round.get('name', ''))}\n"
+    )
+
+    def medal(n: int) -> str:
+        if n == 1:
+            return "🥇"
+        elif n == 2:
+            return "🥈"
+        elif n == 3:
+            return "🥉"
+        else:
+            return f"{n:>2}."
+
+    lines: List[str] = []
+    for i, (team_name, owner_name, total_score) in enumerate(split_totals, 1):
+        safe_team = _escape_html(team_name)
+        safe_owner = _escape_html(owner_name)
+        lines.append(f"{medal(i)} <b>{safe_team}</b> — {safe_owner} · <code>{total_score:.2f}</code>")
+
+    message = f"{title}\n\n" + ("\n".join(lines) if lines else "<i>No teams</i>")
+    return message
+
+
+def fmt_market_open_notification(round_obj: Dict[str, Any], 
+                                team_budget_data: List[Tuple[str, str, float, float, List[Tuple[str, str, float, float]]]]) -> str:
+    """Format the market open notification with budget and price changes."""
+    
+    round_name = round_obj.get('name', 'Unknown Round')
+    round_status = round_obj.get('status', 'unknown')
+    market_closes_at = round_obj.get('marketClosesAt', '')
+    
+    title = (
+        f"📣 <b>Mercado ABERTO!</b>\n"
+        f"🧭 Rodada: <b>{_escape_html(round_name)}</b> ({_escape_html(round_status)})\n"
+    )
+    
+    if market_closes_at:
+        brt_time = format_brt_time(market_closes_at)
+        title += f"⏳ Fecha em: <b>{brt_time}</b>\n\n"
+    else:
+        title += "\n"
+    
+    title += "💼 <b>Orçamentos finais da rodada anterior:</b>\n"
+    
+    team_sections = []
+    for team_name, owner_name, pre_budget, post_budget, player_changes in team_budget_data:
+        section = _build_team_section(team_name, owner_name, pre_budget, post_budget, player_changes)
+        team_sections.append(section)
+    
+    message = title + "\n".join(team_sections)
+    return message
