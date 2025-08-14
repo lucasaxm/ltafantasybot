@@ -1,0 +1,66 @@
+{
+  "mappings": [
+    {
+      "id": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/ranking"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "ranking-default.json"
+      }
+    },
+    {
+      "id": "b2c3d4e5-f607-8901-2345-678901bcdef0",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "LIVE",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/ranking"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "ranking-live.json"
+      }
+    },
+    {
+      "id": "dddddddd-dddd-dddd-dddd-dddddddddddd",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_LIVE",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/ranking"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "ranking-round5.json"
+      }
+    },
+    {
+      "id": "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_COMPLETED",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/ranking"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "ranking-round5.json"
+      }
+    }
+  ]
+}

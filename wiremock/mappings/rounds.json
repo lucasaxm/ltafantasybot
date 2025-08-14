@@ -1,0 +1,228 @@
+{
+  "mappings": [
+    {
+      "id": "11111111-2222-3333-4444-555555555555",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "PRE_MARKET",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-pre-market.json"
+      }
+    },
+    {
+      "id": "22222222-3333-4444-5555-666666666666",
+      "scenarioName": "API_PHASE", 
+      "requiredScenarioState": "MARKET_OPEN",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-market-open.json"
+      }
+    },
+    {
+      "id": "33333333-4444-5555-6666-777777777777",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "MARKET_OPEN_1H", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-market-open-1h.json"
+      }
+    },
+    {
+      "id": "44444444-5555-6666-7777-888888888888",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "MARKET_OPEN_24H",
+      "request": {
+        "method": "GET", 
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-market-open-24h.json"
+      }
+    },
+    {
+      "id": "55555555-6666-7777-8888-999999999999",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "LIVE",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-live.json"
+      }
+    },
+    {
+      "id": "66666666-7777-8888-9999-aaaaaaaaaaaa",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "COMPLETED", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-completed.json"
+      }
+    },
+    {
+      "id": "77777777-7777-7777-7777-777777777777",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_PRE_MARKET", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-pre-market.json"
+      }
+    },
+    {
+      "id": "78888888-8888-8888-8888-888888888888",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-market-open.json"
+      }
+    },
+    {
+      "id": "79999999-9999-9999-9999-999999999999",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN_24H", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-market-open-24h.json"
+      }
+    },
+    {
+      "id": "80000000-0000-0000-0000-000000000000",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN_1H", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-market-open-1h.json"
+      }
+    },
+    {
+      "id": "99999999-9999-9999-9999-999999999999",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_LIVE", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-live.json"
+      }
+    },
+    {
+      "id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_COMPLETED", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-completed.json"
+      }
+    },
+    {
+      "id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-market-open.json"
+      }
+    },
+    {
+      "id": "cbcbcbcb-cbcb-cbcb-cbcb-cbcbcbcbcbcb",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN_24H", 
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/leagues/([^/]+)/rounds"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "rounds-round5-market-open-24h.json"
+      }
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+{
+  "data": {
+    "roundRoster": {
+      "preRoundBudget": 62.3,
+      "postRoundBudget": 65.8
+    },
+    "rosterPlayers": [
+      {
+        "role": "top",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_1",
+            "name": "Guigo",
+            "team": {"name": "FURIA"}
+          },
+          "preRoundPrice": 13.4,
+          "postRoundPrice": 14.1
+        },
+        "score": 28.45
+      },
+      {
+        "role": "jungle",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_6",
+            "name": "Cariok",
+            "team": {"name": "paiN Gaming"}
+          },
+          "preRoundPrice": 9.2,
+          "postRoundPrice": 10.8
+        },
+        "score": 25.67
+      },
+      {
+        "role": "mid",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_7",
+            "name": "TitaN",
+            "team": {"name": "LOUD"}
+          },
+          "preRoundPrice": 12.8,
+          "postRoundPrice": 14.2
+        },
+        "score": 31.89
+      },
+      {
+        "role": "bottom",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_4",
+            "name": "Ayu",
+            "team": {"name": "FURIA"}
+          },
+          "preRoundPrice": 14.6,
+          "postRoundPrice": 15.3
+        },
+        "score": 29.12
+      },
+      {
+        "role": "support",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_8",
+            "name": "Bvoy",
+            "team": {"name": "RED Kalunga"}
+          },
+          "preRoundPrice": 8.4,
+          "postRoundPrice": 8.9
+        },
+        "score": 18.34
+      }
+    ]
+  }
+}

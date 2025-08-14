@@ -299,21 +299,30 @@ def update_stale_counter(chat_id: int, has_changes: bool):
 
 def _create_reminder_task(delay: float, callback_func, chat_id: int, flag_key: str, reminder_key: str, description: str):
     """Create a scheduled reminder task."""
-    if delay <= 0:
-        return None
-    
     async def delayed_callback():
         try:
             await callback_func()
+            # Ensure the nested structure exists before setting the flag
+            if chat_id not in REMINDER_FLAGS:
+                REMINDER_FLAGS[chat_id] = {}
+            if reminder_key not in REMINDER_FLAGS[chat_id]:
+                REMINDER_FLAGS[chat_id][reminder_key] = {}
             REMINDER_FLAGS[chat_id][reminder_key][flag_key] = True
             write_runtime_state(list(WATCHERS.keys()))
             logger.info(f"Sent {description} for chat {chat_id}")
         except Exception as e:
             logger.error(f"Failed to send {description} to chat {chat_id}: {e}")
     
-    task = asyncio.create_task(asyncio.sleep(delay))
-    task.add_done_callback(lambda _: asyncio.create_task(delayed_callback()) if not task.cancelled() else None)
-    return task
+    if delay <= 0:
+        # Time has passed, send immediately (this is the fix for missed reminders)
+        logger.info(f"Sending overdue {description} immediately for chat {chat_id} (was {delay:.0f}s late)")
+        task = asyncio.create_task(delayed_callback())
+        return task
+    else:
+        # Schedule for future
+        task = asyncio.create_task(asyncio.sleep(delay))
+        task.add_done_callback(lambda _: asyncio.create_task(delayed_callback()) if not task.cancelled() else None)
+        return task
 
 
 def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, Any], bot):
@@ -330,6 +339,10 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
         round_id = round_obj["id"]
         reminder_key = f"{league}_{round_id}"
         
+        # Ensure chat_id has a REMINDER_FLAGS entry
+        if chat_id not in REMINDER_FLAGS:
+            REMINDER_FLAGS[chat_id] = {}
+        
         # Initialize reminder flags for this round if needed
         if reminder_key not in REMINDER_FLAGS[chat_id]:
             REMINDER_FLAGS[chat_id][reminder_key] = {
@@ -338,6 +351,17 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                 "market_open_sent": False,
                 "closed_transition_triggered": False,
             }
+        else:
+            # Ensure all expected keys exist in case of partial initialization
+            expected_keys = {
+                "t_minus_24h_sent": False,
+                "t_minus_1h_sent": False,
+                "market_open_sent": False,
+                "closed_transition_triggered": False,
+            }
+            for key, default_value in expected_keys.items():
+                if key not in REMINDER_FLAGS[chat_id][reminder_key]:
+                    REMINDER_FLAGS[chat_id][reminder_key][key] = default_value
         
         flags = REMINDER_FLAGS[chat_id][reminder_key]
         
@@ -511,34 +535,29 @@ async def compute_and_send_split_ranking(chat_id: int, league: str, completed_ro
         logger.error(f"Failed to compute split ranking for chat {chat_id}: {e}")
 
 
-async def check_round_status(chat_id: int, league: str, current_round, teams_data, bot) -> bool:
-    """Check round status and handle completion. Returns True if should continue watching."""
-    if current_round is None:
-        await bot.send_message(chat_id, f"❌ <b>Error:</b> No rounds found for league <code>{league}</code>.\nStopped watching.", parse_mode="HTML")
-        return False
-    
-    if not teams_data:
-        round_status = current_round.get('status', 'unknown')
-        round_name = current_round.get('name', 'Unknown Round')
-        
-        if round_status == 'completed':
-            await handle_round_completion(chat_id, league, current_round, bot)
-            return False
-        else:
-            await bot.send_message(chat_id, f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.", parse_mode="HTML")
-            return False
-    
-    return True
-
-
 async def handle_round_completion(chat_id: int, league: str, completed_round: Dict[str, Any], bot):
     """Handle round completion notifications and cleanup."""
+    round_name = completed_round.get('name', 'unknown')
+    round_id = completed_round.get('id', 'unknown')
+    logger.info(f"🏁 HANDLE_ROUND_COMPLETION called for chat {chat_id}, round {round_name}")
+    
+    # Check if we already handled completion for this round to avoid duplicates
+    completion_flag_key = f"completion_{league}_{round_id}"
+    if chat_id in REMINDER_FLAGS and completion_flag_key in REMINDER_FLAGS[chat_id]:
+        logger.debug(f"Completion already handled for round {round_name} in chat {chat_id}")
+        return
+    
+    # Mark this round's completion as handled
+    if chat_id not in REMINDER_FLAGS:
+        REMINDER_FLAGS[chat_id] = {}
+    REMINDER_FLAGS[chat_id][completion_flag_key] = True
+    
     if chat_id in WATCH_MESSAGE_IDS:
         try:
             await bot.delete_message(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id])
         except Exception:
             pass
-    
+
     try:
         # Send final round scores
         final_msg, _ = await gather_live_scores(league)
@@ -550,8 +569,6 @@ async def handle_round_completion(chat_id: int, league: str, completed_round: Di
         
     except Exception as e:
         await bot.send_message(chat_id, f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}", parse_mode="HTML")
-
-
 async def process_score_and_ranking_changes(chat_id: int, league: str, current_round, current_scores, 
                                           current_split_ranking, split_teams_data, teams_data, 
                                           is_resumed: bool, bot):
@@ -616,7 +633,7 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
     return None
 
 
-async def _handle_market_open_phase(chat_id: int, league: str) -> Optional[WatcherPhase]:
+async def _handle_market_open_phase(chat_id: int, league: str, bot=None) -> Optional[WatcherPhase]:
     """Handle MARKET_OPEN phase logic. Returns new phase if transition occurs."""
     async with make_session() as session:
         rounds = await get_rounds(session, league)
@@ -626,6 +643,18 @@ async def _handle_market_open_phase(chat_id: int, league: str) -> Optional[Watch
         # Transition to LIVE
         initialize_phase_state(chat_id, WatcherPhase.LIVE)
         logger.info(f"Transitioned to LIVE for chat {chat_id}")
+        
+        # Send market closed message
+        if bot:
+            try:
+                await bot.send_message(
+                    chat_id,
+                    "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.error(f"Failed to send market closed message for chat {chat_id}: {e}")
+        
         try:
             write_runtime_state(list(WATCHERS.keys()))
         except Exception:
@@ -639,12 +668,9 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
     """Handle LIVE phase logic. Returns new phase if transition occurs and updated save counter."""
     current_scores, current_ranking, teams_data, current_round = await get_structured_scores(league)
     
-    # Check for round completion
-    if not await check_round_status(chat_id, league, current_round, teams_data, bot):
-        return None, save_counter  # Error, exit watch loop
-    
-    # Check for transition to completed
+    # Check for transition to completed FIRST - before other checks
     if current_round and current_round.get("status") == "completed":
+        logger.info(f"🔄 COMPLETION DETECTED: Round {current_round.get('name', 'unknown')} status is completed for chat {chat_id}")
         await handle_round_completion(chat_id, league, current_round, bot)
         # Transition back to PRE_MARKET
         initialize_phase_state(chat_id, WatcherPhase.PRE_MARKET)
@@ -654,6 +680,19 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
         except Exception:
             pass
         return WatcherPhase.PRE_MARKET, save_counter
+    
+    # Check for other round status issues (but not completion, which we handled above)
+    if not current_round or (current_round.get("status") != "in_progress" and current_round.get("status") != "completed"):
+        round_status = current_round.get('status', 'unknown') if current_round else 'no_round'
+        round_name = current_round.get('name', 'Unknown Round') if current_round else 'No Round'
+        await bot.send_message(chat_id, f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.", parse_mode="HTML")
+        return None, save_counter  # Error, exit watch loop
+    
+    # Check if we have no teams data but round is in progress (shouldn't happen normally)
+    if not teams_data:
+        logger.warning(f"No teams data for in_progress round {current_round.get('name', 'unknown')}")
+        # Don't exit, just continue to next poll
+        return None, save_counter + 1
     
     if current_round:
         round_id = current_round["id"]
@@ -690,7 +729,7 @@ async def _execute_phase_logic(current_phase: WatcherPhase, chat_id: int, league
         return new_phase, save_counter
         
     elif current_phase == WatcherPhase.MARKET_OPEN:
-        new_phase = await _handle_market_open_phase(chat_id, league)
+        new_phase = await _handle_market_open_phase(chat_id, league, bot)
         return new_phase, save_counter
         
     elif current_phase == WatcherPhase.LIVE:
@@ -702,6 +741,8 @@ async def _execute_phase_logic(current_phase: WatcherPhase, chat_id: int, league
 async def _main_loop_iteration(current_phase: WatcherPhase, chat_id: int, league: str, bot, 
                               is_resumed: bool, save_counter: int) -> Tuple[Optional[WatcherPhase], int, bool]:
     """Execute one iteration of the main loop. Returns (new_phase, save_counter, should_break)."""
+    logger.debug(f"🔄 Main loop iteration: chat {chat_id}, phase {current_phase.value}, save_counter {save_counter}")
+    
     # Execute phase-specific logic
     new_phase, save_counter = await _execute_phase_logic(
         current_phase, chat_id, league, bot, is_resumed, save_counter
@@ -711,6 +752,7 @@ async def _main_loop_iteration(current_phase: WatcherPhase, chat_id: int, league
         return None, save_counter, True
     
     if new_phase:
+        logger.info(f"🔄 PHASE TRANSITION: chat {chat_id} from {current_phase.value} to {new_phase.value}")
         current_phase = new_phase
         if new_phase == WatcherPhase.PRE_MARKET:
             return current_phase, save_counter, False  # Skip wait for immediate re-poll

@@ -1,0 +1,75 @@
+{
+  "data": {
+    "roundRoster": {
+      "preRoundBudget": 56.5,
+      "postRoundBudget": 60.0
+    },
+    "rosterPlayers": [
+      {
+        "role": "top",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_1",
+            "name": "Guigo",
+            "team": {"name": "FURIA"}
+          },
+          "preRoundPrice": 13.1,
+          "postRoundPrice": 13.4
+        },
+        "score": 21.86
+      },
+      {
+        "role": "jungle",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_2",
+            "name": "Gryffinn",
+            "team": {"name": "LOUD"}
+          },
+          "preRoundPrice": 8.0,
+          "postRoundPrice": 9.1
+        },
+        "score": 19.39
+      },
+      {
+        "role": "mid",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_3",
+            "name": "Kaze",
+            "team": {"name": "RED Kalunga"}
+          },
+          "preRoundPrice": 11.6,
+          "postRoundPrice": 13.9
+        },
+        "score": 32.19
+      },
+      {
+        "role": "bottom",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_4",
+            "name": "Ayu",
+            "team": {"name": "FURIA"}
+          },
+          "preRoundPrice": 14.7,
+          "postRoundPrice": 14.6
+        },
+        "score": 24.84
+      },
+      {
+        "role": "support",
+        "roundEsportsPlayer": {
+          "proPlayer": {
+            "id": "player_5",
+            "name": "ProDelta",
+            "team": {"name": "Fluxo W7M"}
+          },
+          "preRoundPrice": 7.6,
+          "postRoundPrice": 7.5
+        },
+        "score": 12.50
+      }
+    ]
+  }
+}

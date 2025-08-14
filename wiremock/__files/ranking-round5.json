@@ -1,0 +1,44 @@
+{
+  "data": [
+    {
+      "userTeam": {
+        "id": "team_2",
+        "name": "Bonde da Maromba",
+        "ownerName": "Balver"
+      },
+      "score": 133.47,
+      "splitScore": 431.92,
+      "position": 1
+    },
+    {
+      "userTeam": {
+        "id": "team_1",
+        "name": "Team Ha Bay",
+        "ownerName": "umaboatarde"
+      },
+      "score": 115.28,
+      "splitScore": 504.50,
+      "position": 2
+    },
+    {
+      "userTeam": {
+        "id": "team_4",
+        "name": "Team Terray",
+        "ownerName": "Eren"
+      },
+      "score": 102.83,
+      "splitScore": 347.95,
+      "position": 3
+    },
+    {
+      "userTeam": {
+        "id": "team_3",
+        "name": "TEAM COMEU",
+        "ownerName": "XXK"
+      },
+      "score": 95.64,
+      "splitScore": 363.52,
+      "position": 4
+    }
+  ]
+}

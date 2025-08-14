@@ -1,0 +1,44 @@
+{
+  "data": [
+    {
+      "id": "round_1", 
+      "name": "Round 1",
+      "split": "Split 3",
+      "indexInSplit": 1,
+      "status": "completed",
+      "marketClosesAt": "2025-08-07T15:00:00.000Z",
+      "startsAt": "2025-08-08T15:30:00.000Z",
+      "endsAt": "2025-08-09T18:00:00.000Z"
+    },
+    {
+      "id": "round_2",
+      "name": "Round 2",
+      "split": "Split 3",
+      "indexInSplit": 2,
+      "status": "completed",
+      "marketClosesAt": "2025-08-10T15:00:00.000Z",
+      "startsAt": "2025-08-11T15:30:00.000Z",
+      "endsAt": "2025-08-12T18:00:00.000Z"
+    },
+    {
+      "id": "round_3",
+      "name": "Round 3",
+      "split": "Split 3",
+      "indexInSplit": 3,
+      "status": "completed",
+      "marketClosesAt": "2025-08-13T15:00:00.000Z",
+      "startsAt": "2025-08-13T18:00:00.000Z",
+      "endsAt": "2025-08-14T06:00:00.000Z"
+    },
+    {
+      "id": "round_4",
+      "name": "Round 4",
+      "split": "Split 3",
+      "indexInSplit": 4,
+      "status": "market_open",
+      "marketClosesAt": "2025-08-16T15:00:00.000Z",
+      "startsAt": "2025-08-16T18:00:00.000Z",
+      "endsAt": null
+    }
+  ]
+}
