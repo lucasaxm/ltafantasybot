@@ -47,7 +47,7 @@ def load_runtime_state() -> None:
             # Use function-level imports to avoid module isolation issues
             from .watchers import (
                 LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
-                WATCHER_PHASES, REMINDER_FLAGS, STALE_COUNTERS, CURRENT_BACKOFF, WatcherPhase
+                WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF, WatcherPhase
             )
             
             # Clear and update the actual state variables
@@ -68,8 +68,16 @@ def load_runtime_state() -> None:
             WATCHER_PHASES.clear()
             WATCHER_PHASES.update({int(k): WatcherPhase(v) for k, v in phases_data.items()})
             
-            REMINDER_FLAGS.clear()
-            REMINDER_FLAGS.update({int(k): v for k, v in state.get("reminder_flags", {}).items()})
+            REMINDER_SCHEDULES.clear()
+            # Load both old reminder_flags and new reminder_schedules for backward compatibility
+            old_flags = state.get("reminder_flags", {})
+            new_schedules = state.get("reminder_schedules", {})
+            if new_schedules:
+                REMINDER_SCHEDULES.update({int(k): v for k, v in new_schedules.items()})
+            elif old_flags:
+                # TODO: Convert old flags to new schedules when possible
+                logger.warning("Found old reminder_flags format - may need manual conversion")
+                REMINDER_SCHEDULES.update({int(k): v for k, v in old_flags.items()})
             
             STALE_COUNTERS.clear()
             STALE_COUNTERS.update({int(k): v for k, v in state.get("stale_counters", {}).items()})
@@ -80,7 +88,7 @@ def load_runtime_state() -> None:
             active_chats_count = len(state.get("active_chats", []))
             logger.info(f"Loaded runtime state for {active_chats_count} chats")
             logger.debug(f"Loaded WATCHER_PHASES: {WATCHER_PHASES}")
-            logger.debug(f"Loaded REMINDER_FLAGS: {REMINDER_FLAGS}")
+            logger.debug(f"Loaded REMINDER_SCHEDULES: {REMINDER_SCHEDULES}")
         else:
             logger.info("No existing runtime state file found")
     except Exception as e:
@@ -93,7 +101,7 @@ def save_runtime_state() -> None:
         # Use function-level imports to avoid module isolation issues
         from .watchers import (
             LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
-            WATCHER_PHASES, REMINDER_FLAGS, STALE_COUNTERS, CURRENT_BACKOFF
+            WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF
         )
         
         # WATCHERS list is maintained in watchers module; defer active_chats collection there
@@ -103,7 +111,7 @@ def save_runtime_state() -> None:
             "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
             "watcher_phases": {str(k): v.value for k, v in WATCHER_PHASES.items()},
-            "reminder_flags": {str(k): v for k, v in REMINDER_FLAGS.items()},
+            "reminder_schedules": {str(k): v for k, v in REMINDER_SCHEDULES.items()},
             "stale_counters": {str(k): v for k, v in STALE_COUNTERS.items()},
             "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
             "last_updated": datetime.now().isoformat(),
@@ -119,14 +127,14 @@ def write_runtime_state(active_chats: List[int]) -> None:
     # Import state variables at function level to ensure we get the current module's copies
     from .watchers import (
         LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
-        WATCHER_PHASES, REMINDER_FLAGS, STALE_COUNTERS, CURRENT_BACKOFF
+        WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF
     )
     
     try:
         # Debug logging to see what state variables contain
         logger.debug(f"write_runtime_state called with active_chats: {active_chats}")
         logger.debug(f"WATCHER_PHASES content: {WATCHER_PHASES}")
-        logger.debug(f"REMINDER_FLAGS content: {REMINDER_FLAGS}")
+        logger.debug(f"REMINDER_SCHEDULES content: {REMINDER_SCHEDULES}")
         logger.debug(f"STALE_COUNTERS content: {STALE_COUNTERS}")
         logger.debug(f"CURRENT_BACKOFF content: {CURRENT_BACKOFF}")
         
@@ -137,7 +145,7 @@ def write_runtime_state(active_chats: List[int]) -> None:
             "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
             "watcher_phases": {str(k): v.value for k, v in WATCHER_PHASES.items()},
-            "reminder_flags": {str(k): v for k, v in REMINDER_FLAGS.items()},
+            "reminder_schedules": {str(k): v for k, v in REMINDER_SCHEDULES.items()},
             "stale_counters": {str(k): v for k, v in STALE_COUNTERS.items()},
             "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
             "last_updated": datetime.now().isoformat(),

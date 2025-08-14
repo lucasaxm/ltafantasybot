@@ -24,7 +24,7 @@ FIRST_POLL_AFTER_RESUME: Dict[int, bool] = {}
 # Phase-based state tracking
 WATCHER_PHASES: Dict[int, WatcherPhase] = {}
 SCHEDULED_TASKS: Dict[int, List[asyncio.Task]] = {}
-REMINDER_FLAGS: Dict[int, Dict[str, bool]] = {}
+REMINDER_SCHEDULES: Dict[int, Dict[str, Dict[str, Any]]] = {}
 STALE_COUNTERS: Dict[int, int] = {}
 CURRENT_BACKOFF: Dict[int, float] = {}
 

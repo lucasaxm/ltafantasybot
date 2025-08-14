@@ -42,7 +42,7 @@ from .state import (
     FIRST_POLL_AFTER_RESUME,
     WATCHER_PHASES,
     SCHEDULED_TASKS,
-    REMINDER_FLAGS,
+    REMINDER_SCHEDULES,
     STALE_COUNTERS,
     CURRENT_BACKOFF,
     WatcherPhase,
@@ -231,7 +231,7 @@ def cleanup_chat_data(chat_id: int):
     WATCHER_PHASES.pop(chat_id, None)
     STALE_COUNTERS.pop(chat_id, None)
     CURRENT_BACKOFF.pop(chat_id, None)
-    REMINDER_FLAGS.pop(chat_id, None)
+    REMINDER_SCHEDULES.pop(chat_id, None)
     
     # Cancel any scheduled tasks for this chat
     if chat_id in SCHEDULED_TASKS:
@@ -247,12 +247,12 @@ def initialize_phase_state(chat_id: int, phase: WatcherPhase):
     WATCHER_PHASES[chat_id] = phase
     STALE_COUNTERS[chat_id] = 0
     CURRENT_BACKOFF[chat_id] = 1.0
-    if chat_id not in REMINDER_FLAGS:
-        REMINDER_FLAGS[chat_id] = {}
+    if chat_id not in REMINDER_SCHEDULES:
+        REMINDER_SCHEDULES[chat_id] = {}
     if chat_id not in SCHEDULED_TASKS:
         SCHEDULED_TASKS[chat_id] = []
     logger.debug(f"After initialization - WATCHER_PHASES: {WATCHER_PHASES}")
-    logger.debug(f"After initialization - REMINDER_FLAGS: {REMINDER_FLAGS}")
+    logger.debug(f"After initialization - REMINDER_SCHEDULES: {REMINDER_SCHEDULES}")
     logger.debug(f"After initialization - STALE_COUNTERS: {STALE_COUNTERS}")
     # Persist immediately so external monitoring sees phase change
     try:
@@ -297,17 +297,11 @@ def update_stale_counter(chat_id: int, has_changes: bool):
             logger.debug(f"Applied backoff {new_backoff:.1f}x for chat {chat_id}")
 
 
-def _create_reminder_task(delay: float, callback_func, chat_id: int, flag_key: str, reminder_key: str, description: str):
+def _create_reminder_task(delay: float, callback_func, chat_id: int, description: str = "reminder"):
     """Create a scheduled reminder task."""
     async def delayed_callback():
         try:
             await callback_func()
-            # Ensure the nested structure exists before setting the flag
-            if chat_id not in REMINDER_FLAGS:
-                REMINDER_FLAGS[chat_id] = {}
-            if reminder_key not in REMINDER_FLAGS[chat_id]:
-                REMINDER_FLAGS[chat_id][reminder_key] = {}
-            REMINDER_FLAGS[chat_id][reminder_key][flag_key] = True
             write_runtime_state(list(WATCHERS.keys()))
             logger.info(f"Sent {description} for chat {chat_id}")
         except Exception as e:
@@ -333,84 +327,135 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
         
     try:
         from datetime import datetime
+        from .reminder_utils import create_reminder_schedule, get_pending_reminders, mark_reminder_sent
+        
         close_time = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
         current_time = datetime.now(timezone.utc)
         
         round_id = round_obj["id"]
         reminder_key = f"{league}_{round_id}"
         
-        # Ensure chat_id has a REMINDER_FLAGS entry
-        if chat_id not in REMINDER_FLAGS:
-            REMINDER_FLAGS[chat_id] = {}
+        # Ensure chat_id has a REMINDER_SCHEDULES entry
+        if chat_id not in REMINDER_SCHEDULES:
+            REMINDER_SCHEDULES[chat_id] = {}
         
-        # Initialize reminder flags for this round if needed
-        if reminder_key not in REMINDER_FLAGS[chat_id]:
-            REMINDER_FLAGS[chat_id][reminder_key] = {
-                "t_minus_24h_sent": False,
-                "t_minus_1h_sent": False,
-                "market_open_sent": False,
-                "closed_transition_triggered": False,
-            }
-        else:
-            # Ensure all expected keys exist in case of partial initialization
-            expected_keys = {
-                "t_minus_24h_sent": False,
-                "t_minus_1h_sent": False,
-                "market_open_sent": False,
-                "closed_transition_triggered": False,
-            }
-            for key, default_value in expected_keys.items():
-                if key not in REMINDER_FLAGS[chat_id][reminder_key]:
-                    REMINDER_FLAGS[chat_id][reminder_key][key] = default_value
+        # Create or update the reminder schedule for this round
+        if reminder_key not in REMINDER_SCHEDULES[chat_id]:
+            REMINDER_SCHEDULES[chat_id][reminder_key] = create_reminder_schedule(
+                round_id, league, market_closes_at
+            )
         
-        flags = REMINDER_FLAGS[chat_id][reminder_key]
+        schedule = REMINDER_SCHEDULES[chat_id][reminder_key]
+        flags = schedule.get("flags", {})
         
-        # Schedule 24h reminder
-        time_to_24h = (close_time - timedelta(hours=24) - current_time).total_seconds()
-        if not flags["t_minus_24h_sent"]:
-            async def send_24h_reminder():
-                await bot.send_message(
-                    chat_id,
-                    "⏰ Lembrete: o mercado fecha em 24 horas ({})\n⚠️ Últimas 24h para fazer alterações no seu time!".format(
-                        close_time.strftime("%Y-%m-%d %H:%M UTC")
-                    ),
-                    parse_mode="HTML"
-                )
+        # Get pending reminders based on current time
+        pending = get_pending_reminders(schedule, current_time)
+        
+        # Schedule 24h reminder if not sent and due in the future
+        if not flags.get("reminder_24h_sent", False):
+            reminder_24h_time = datetime.fromisoformat(schedule["reminder_24h_at"])
+            time_to_24h = (reminder_24h_time - current_time).total_seconds()
             
-            task = _create_reminder_task(time_to_24h, send_24h_reminder, chat_id, "t_minus_24h_sent", reminder_key, "24h reminder")
-            if task:
+            if pending.get("reminder_24h_due", False):
+                # Send immediately if overdue
+                async def send_24h_reminder():
+                    await bot.send_message(
+                        chat_id,
+                        "⏰ Lembrete: o mercado fecha em 24 horas ({})\n⚠️ Últimas 24h para fazer alterações no seu time!".format(
+                            close_time.strftime("%Y-%m-%d %H:%M UTC")
+                        ),
+                        parse_mode="HTML"
+                    )
+                    mark_reminder_sent(schedule, "reminder_24h")
+                
+                # Schedule immediate execution
+                task = asyncio.create_task(send_24h_reminder())
                 SCHEDULED_TASKS[chat_id].append(task)
-                logger.info(f"Scheduled 24h reminder for {league} chat {chat_id} in {time_to_24h:.0f}s")
+                logger.info(f"Sending overdue 24h reminder for {league} chat {chat_id}")
+            elif time_to_24h > 0:
+                # Schedule for future
+                async def send_24h_reminder():
+                    await bot.send_message(
+                        chat_id,
+                        "⏰ Lembrete: o mercado fecha em 24 horas ({})\n⚠️ Últimas 24h para fazer alterações no seu time!".format(
+                            close_time.strftime("%Y-%m-%d %H:%M UTC")
+                        ),
+                        parse_mode="HTML"
+                    )
+                    mark_reminder_sent(schedule, "reminder_24h")
+                
+                task = _create_reminder_task(time_to_24h, send_24h_reminder, chat_id, "24h reminder")
+                if task:
+                    SCHEDULED_TASKS[chat_id].append(task)
+                    logger.info(f"Scheduled 24h reminder for {league} chat {chat_id} in {time_to_24h:.0f}s")
         
-        # Schedule 1h reminder  
-        time_to_1h = (close_time - timedelta(hours=1) - current_time).total_seconds()
-        if not flags["t_minus_1h_sent"]:
-            async def send_1h_reminder():
-                await bot.send_message(
-                    chat_id,
-                    "⏰ Lembrete: o mercado fecha em 1 hora!\n🏃‍♂️ Última chance para fazer alterações no seu time!",
-                    parse_mode="HTML"
-                )
+        # Schedule 1h reminder if not sent and due in the future
+        if not flags.get("reminder_1h_sent", False):
+            reminder_1h_time = datetime.fromisoformat(schedule["reminder_1h_at"])
+            time_to_1h = (reminder_1h_time - current_time).total_seconds()
             
-            task = _create_reminder_task(time_to_1h, send_1h_reminder, chat_id, "t_minus_1h_sent", reminder_key, "1h reminder")
-            if task:
+            if pending.get("reminder_1h_due", False):
+                # Send immediately if overdue
+                async def send_1h_reminder():
+                    await bot.send_message(
+                        chat_id,
+                        "⏰ Lembrete: o mercado fecha em 1 hora!\n🏃‍♂️ Última chance para fazer alterações no seu time!",
+                        parse_mode="HTML"
+                    )
+                    mark_reminder_sent(schedule, "reminder_1h")
+                
+                # Schedule immediate execution
+                task = asyncio.create_task(send_1h_reminder())
                 SCHEDULED_TASKS[chat_id].append(task)
-                logger.info(f"Scheduled 1h reminder for {league} chat {chat_id} in {time_to_1h:.0f}s")
+                logger.info(f"Sending overdue 1h reminder for {league} chat {chat_id}")
+            elif time_to_1h > 0:
+                # Schedule for future
+                async def send_1h_reminder():
+                    await bot.send_message(
+                        chat_id,
+                        "⏰ Lembrete: o mercado fecha em 1 hora!\n🏃‍♂️ Última chance para fazer alterações no seu time!",
+                        parse_mode="HTML"
+                    )
+                    mark_reminder_sent(schedule, "reminder_1h")
+                
+                task = _create_reminder_task(time_to_1h, send_1h_reminder, chat_id, "1h reminder")
+                if task:
+                    SCHEDULED_TASKS[chat_id].append(task)
+                    logger.info(f"Scheduled 1h reminder for {league} chat {chat_id} in {time_to_1h:.0f}s")
         
         # Schedule market close transition
-        time_to_close = (close_time - current_time).total_seconds()
-        if not flags["closed_transition_triggered"]:
-            async def trigger_close_transition():
-                await bot.send_message(
-                    chat_id,
-                    "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
-                    parse_mode="HTML"
-                )
+        if not flags.get("closed_transition_triggered", False):
+            market_close_time = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
+            time_to_close = (market_close_time - current_time).total_seconds()
             
-            task = _create_reminder_task(time_to_close, trigger_close_transition, chat_id, "closed_transition_triggered", reminder_key, "market close")
-            if task:
+            if pending.get("market_close_due", False):
+                # Trigger immediately if overdue
+                async def trigger_close_transition():
+                    await bot.send_message(
+                        chat_id,
+                        "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
+                        parse_mode="HTML"
+                    )
+                    mark_reminder_sent(schedule, "closed_transition")
+                
+                # Schedule immediate execution
+                task = asyncio.create_task(trigger_close_transition())
                 SCHEDULED_TASKS[chat_id].append(task)
-                logger.info(f"Scheduled market close for {league} chat {chat_id} in {time_to_close:.0f}s")
+                logger.info(f"Triggering overdue market close for {league} chat {chat_id}")
+            elif time_to_close > 0:
+                # Schedule for future
+                async def trigger_close_transition():
+                    await bot.send_message(
+                        chat_id,
+                        "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
+                        parse_mode="HTML"
+                    )
+                    mark_reminder_sent(schedule, "closed_transition")
+                
+                task = _create_reminder_task(time_to_close, trigger_close_transition, chat_id, "market close")
+                if task:
+                    SCHEDULED_TASKS[chat_id].append(task)
+                    logger.info(f"Scheduled market close for {league} chat {chat_id} in {time_to_close:.0f}s")
             
     except Exception as e:
         logger.error(f"Failed to schedule market reminders for chat {chat_id}: {e}")
@@ -543,14 +588,14 @@ async def handle_round_completion(chat_id: int, league: str, completed_round: Di
     
     # Check if we already handled completion for this round to avoid duplicates
     completion_flag_key = f"completion_{league}_{round_id}"
-    if chat_id in REMINDER_FLAGS and completion_flag_key in REMINDER_FLAGS[chat_id]:
+    if chat_id in REMINDER_SCHEDULES and completion_flag_key in REMINDER_SCHEDULES[chat_id]:
         logger.debug(f"Completion already handled for round {round_name} in chat {chat_id}")
         return
     
     # Mark this round's completion as handled
-    if chat_id not in REMINDER_FLAGS:
-        REMINDER_FLAGS[chat_id] = {}
-    REMINDER_FLAGS[chat_id][completion_flag_key] = True
+    if chat_id not in REMINDER_SCHEDULES:
+        REMINDER_SCHEDULES[chat_id] = {}
+    REMINDER_SCHEDULES[chat_id][completion_flag_key] = {"completed": True}
     
     if chat_id in WATCH_MESSAGE_IDS:
         try:
@@ -615,10 +660,31 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
         # Send market open notification
         round_id = latest_round["id"]
         reminder_key = f"{league}_{round_id}"
-        if not REMINDER_FLAGS[chat_id].get(reminder_key, {}).get("market_open_sent", False):
+        
+        # Check if market open notification was already sent using the new structure
+        schedule = REMINDER_SCHEDULES[chat_id].get(reminder_key, {})
+        flags = schedule.get("flags", {})
+        
+        if not flags.get("market_open_sent", False):
             await send_market_open_notification(chat_id, league, latest_round, bot)
-            REMINDER_FLAGS[chat_id][reminder_key] = REMINDER_FLAGS[chat_id].get(reminder_key, {})
-            REMINDER_FLAGS[chat_id][reminder_key]["market_open_sent"] = True
+            # Mark as sent in the schedule
+            if reminder_key not in REMINDER_SCHEDULES[chat_id]:
+                from .reminder_utils import create_reminder_schedule
+                market_closes_at = get_market_close_time(latest_round)
+                if market_closes_at:
+                    REMINDER_SCHEDULES[chat_id][reminder_key] = create_reminder_schedule(
+                        round_id, league, market_closes_at
+                    )
+            
+            if reminder_key in REMINDER_SCHEDULES[chat_id]:
+                # Ensure flags dict exists
+                if "flags" not in REMINDER_SCHEDULES[chat_id][reminder_key]:
+                    REMINDER_SCHEDULES[chat_id][reminder_key]["flags"] = {
+                        "market_open_sent": False,
+                        "reminder_1h_sent": False, 
+                        "reminder_24h_sent": False
+                    }
+                REMINDER_SCHEDULES[chat_id][reminder_key]["flags"]["market_open_sent"] = True
         
         # Schedule reminders
         schedule_market_reminders(chat_id, league, latest_round, bot)
@@ -785,18 +851,39 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
             round_id = latest_round["id"]
             reminder_key = f"{league}_{round_id}"
             
-            # Initialize full reminder flags structure
-            if reminder_key not in REMINDER_FLAGS[chat_id]:
-                REMINDER_FLAGS[chat_id][reminder_key] = {
-                    "t_minus_24h_sent": False,
-                    "t_minus_1h_sent": False,
-                    "market_open_sent": False,
-                    "closed_transition_triggered": False,
-                }
+            # Initialize full reminder schedule structure
+            if reminder_key not in REMINDER_SCHEDULES[chat_id]:
+                from .reminder_utils import create_reminder_schedule
+                market_closes_at = get_market_close_time(latest_round)
+                if market_closes_at:
+                    REMINDER_SCHEDULES[chat_id][reminder_key] = create_reminder_schedule(
+                        round_id, league, market_closes_at
+                    )
+                else:
+                    # Fallback if no market close time
+                    REMINDER_SCHEDULES[chat_id][reminder_key] = {
+                        "flags": {
+                            "market_open_sent": False,
+                            "reminder_24h_sent": False,
+                            "reminder_1h_sent": False,
+                            "closed_transition_triggered": False,
+                        }
+                    }
             
-            if not REMINDER_FLAGS[chat_id][reminder_key]["market_open_sent"]:
+            schedule = REMINDER_SCHEDULES[chat_id][reminder_key]
+            flags = schedule.get("flags", {})
+            
+            if not flags.get("market_open_sent", False):
                 await send_market_open_notification(chat_id, league, latest_round, bot)
-                REMINDER_FLAGS[chat_id][reminder_key]["market_open_sent"] = True
+                # Ensure the structure exists before setting the flag
+                if "flags" not in REMINDER_SCHEDULES[chat_id][reminder_key]:
+                    REMINDER_SCHEDULES[chat_id][reminder_key]["flags"] = {
+                        "market_open_sent": False,
+                        "reminder_24h_sent": False, 
+                        "reminder_1h_sent": False,
+                        "closed_transition_triggered": False,
+                    }
+                REMINDER_SCHEDULES[chat_id][reminder_key]["flags"]["market_open_sent"] = True
             
             # Schedule market reminders
             schedule_market_reminders(chat_id, league, latest_round, bot)

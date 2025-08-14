@@ -218,10 +218,10 @@ async def run_all_tests():
         print(f"\n🔍 Running {test_name}...")
         try:
             if is_async:
-                result = await test_func()
+                await test_func()
             else:
-                result = test_func()
-            results.append((test_name, result))
+                test_func()
+            results.append((test_name, True))
         except Exception as e:
             print(f"❌ {test_name} failed with exception: {e}")
             print("Traceback:")

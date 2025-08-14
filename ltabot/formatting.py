@@ -221,30 +221,59 @@ def format_brt_time(utc_time_str: str) -> str:
         return utc_time_str  # Fallback to original
 
 
-def _build_team_section(team_name: str, owner_name: str, pre_budget: float, 
-                       post_budget: float, player_changes: List[Tuple[str, str, float, float]]) -> str:
+def _build_team_section(
+    team_name: str,
+    owner_name: str,
+    pre_budget: float,
+    post_budget: float,
+    player_changes: List[Tuple[str, str, float, float]],
+) -> str:
     """Build individual team section for market open notification."""
-    budget_delta = post_budget - pre_budget
-    delta_sign = "+" if budget_delta >= 0 else ""
-    delta_text = f"({delta_sign}{budget_delta:.1f})" if budget_delta != 0 else ""
-    
+
+    def format_budget_delta(pre: float, post: float) -> str:
+        delta = post - pre
+        if delta == 0:
+            return ""
+        sign = "+" if delta > 0 else ""
+        return f"({sign}{delta:.1f})"
+
+    def format_player_change(role: str, player_name: str, pre_price: float, post_price: float) -> str:
+        price_delta = post_price - pre_price
+        if price_delta == 0:
+            return f"{_escape_html(player_name)}: 0.0"
+        sign = "+" if price_delta > 0 else ""
+        emoji = get_price_change_emoji(price_delta)
+        return f"{emoji} {_escape_html(player_name)}: {sign}{price_delta:.1f}"
+
+    def get_price_change_emoji(price_delta):
+        if price_delta > 0:
+            emoji = "📈"
+        elif price_delta < 0:
+            emoji = "📉"
+        else:
+            emoji = "🟰"
+        return emoji
+
+    budget_delta_text = format_budget_delta(pre_budget, post_budget)
     section = (
-        f"• <b>{_escape_html(team_name)}</b> ({_escape_html(owner_name)}): "
-        f"{pre_budget:.1f} → {post_budget:.1f} {delta_text}"
+        f"{get_price_change_emoji(post_budget - pre_budget)} <b>{_escape_html(team_name)}</b> ({_escape_html(owner_name)}): "
+        f"{pre_budget:.1f} → {post_budget:.1f} {budget_delta_text}"
     )
-    
-    # Add collapsible player details if there are price changes
+
+    role_order = ["top", "jungle", "mid", "bottom", "support"]
+
     if player_changes:
-        player_details = []
-        for role, player_name, pre_price, post_price in player_changes:
-            price_delta = post_price - pre_price
-            delta_sign = "+" if price_delta >= 0 else ""
-            delta_text = f" ({delta_sign}{price_delta:.1f})" if price_delta != 0 else ""
-            player_details.append(f"• {role} - {_escape_html(player_name)}: {pre_price:.1f} → {post_price:.1f}{delta_text}")
-        
+        sorted_player_changes = sorted(
+            player_changes,
+            key=lambda p: role_order.index(p[0]) if p[0] in role_order else 999,
+        )
+        player_details = [
+            format_player_change(role, player_name, pre_price, post_price)
+            for role, player_name, pre_price, post_price in sorted_player_changes
+        ]
         if player_details:
-            section += "\n<blockquote expandable>\n" + "\n".join(player_details) + "\n</blockquote>"
-    
+            section += f"<blockquote expandable>{chr(10).join(player_details)}\n</blockquote>"
+
     return section
 
 

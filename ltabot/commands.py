@@ -386,7 +386,7 @@ async def watchstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Diagnostic command to report current watch state for this chat."""
     chat = update.effective_chat
     chat_id = chat.id
-    from .state import WATCHER_PHASES, STALE_COUNTERS, CURRENT_BACKOFF, REMINDER_FLAGS
+    from .state import WATCHER_PHASES, STALE_COUNTERS, CURRENT_BACKOFF, REMINDER_SCHEDULES
     if chat_id not in WATCHER_PHASES:
         await update.message.reply_text("ℹ️ Não há watcher ativo neste chat.")
         return
@@ -395,12 +395,12 @@ async def watchstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     backoff = CURRENT_BACKOFF.get(chat_id, 1.0)
     # Pick the most recent reminder key if any
     reminder_summary = "—"
-    flags_dict = REMINDER_FLAGS.get(chat_id, {})
-    if flags_dict:
+    schedules_dict = REMINDER_SCHEDULES.get(chat_id, {})
+    if schedules_dict:
         try:
             # Use max by lexical which includes round id; acceptable heuristic
-            latest_key = sorted(flags_dict.keys())[-1]
-            flags = flags_dict[latest_key]
+            latest_key = sorted(schedules_dict.keys())[-1]
+            flags = schedules_dict[latest_key].get("flags", {})
             reminder_summary = ", ".join(f"{k}:{'✅' if v else '❌'}" for k, v in flags.items())
         except Exception:
             pass
