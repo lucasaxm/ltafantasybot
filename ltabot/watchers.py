@@ -314,24 +314,26 @@ def update_stale_counter(chat_id: int, has_changes: bool):
 
 def _create_reminder_task(delay: float, callback_func, chat_id: int, description: str = "reminder"):
     """Create a scheduled reminder task."""
-    async def delayed_callback():
+    async def scheduled_task():
         try:
+            if delay <= 0:
+                # Time has passed, send immediately
+                logger.info(f"Sending overdue {description} immediately for chat {chat_id} (was {delay:.0f}s late)")
+            else:
+                # Schedule for future
+                logger.debug(f"Scheduling {description} for chat {chat_id} in {delay:.0f}s")
+                await asyncio.sleep(delay)
+            
+            # Execute the callback
             await callback_func()
             write_runtime_state(list(WATCHERS.keys()))
             logger.info(f"Sent {description} for chat {chat_id}")
+        except asyncio.CancelledError:
+            logger.debug(f"Cancelled {description} task for chat {chat_id}")
         except Exception as e:
             logger.error(f"Failed to send {description} to chat {chat_id}: {e}")
     
-    if delay <= 0:
-        # Time has passed, send immediately (this is the fix for missed reminders)
-        logger.info(f"Sending overdue {description} immediately for chat {chat_id} (was {delay:.0f}s late)")
-        task = asyncio.create_task(delayed_callback())
-        return task
-    else:
-        # Schedule for future
-        task = asyncio.create_task(asyncio.sleep(delay))
-        task.add_done_callback(lambda _: asyncio.create_task(delayed_callback()) if not task.cancelled() else None)
-        return task
+    return asyncio.create_task(scheduled_task())
 
 
 def _start_market_close_polling(chat_id: int, league: str, bot):
@@ -391,16 +393,9 @@ def _start_market_close_polling(chat_id: int, league: str, bot):
 
 def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, Any], bot):
     """Schedule market close reminders based on marketClosesAt."""
-    market_closes_at = get_market_close_time(round_obj)
-    if not market_closes_at:
-        return
-        
     try:
         from datetime import datetime
         from .reminder_utils import create_reminder_schedule, get_pending_reminders, mark_reminder_sent
-        
-        close_time = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
-        current_time = datetime.now(timezone.utc)
         
         round_id = round_obj["id"]
         reminder_key = f"{league}_{round_id}"
@@ -411,11 +406,20 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
         
         # Create or update the reminder schedule for this round
         if reminder_key not in REMINDER_SCHEDULES[chat_id]:
+            market_closes_at = get_market_close_time(round_obj)
+            if not market_closes_at:
+                return
             REMINDER_SCHEDULES[chat_id][reminder_key] = create_reminder_schedule(
                 round_id, league, market_closes_at
             )
         
         schedule = REMINDER_SCHEDULES[chat_id][reminder_key]
+        # Use the market_closes_at from the existing schedule, not from API
+        market_closes_at = schedule["market_closes_at"]
+        
+        close_time = datetime.fromisoformat(market_closes_at.replace("Z", "+00:00"))
+        current_time = datetime.now(timezone.utc)
+        
         flags = schedule.get("flags", {})
         
         # Get pending reminders based on current time
@@ -951,6 +955,12 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
         while not stop_event.is_set():
             try:
                 save_counter += 1
+                
+                # Check if phase was changed by another task (e.g., market close polling)
+                global_phase = WATCHER_PHASES.get(chat_id)
+                if global_phase and global_phase != current_phase:
+                    logger.info(f"🔄 PHASE SYNC: chat {chat_id} updated from {current_phase.value} to {global_phase.value} by external task")
+                    current_phase = global_phase
                 
                 current_phase, save_counter, should_break = await _main_loop_iteration(
                     current_phase, chat_id, league, bot, is_resumed, save_counter
