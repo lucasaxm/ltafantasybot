@@ -69,15 +69,7 @@ def load_runtime_state() -> None:
             WATCHER_PHASES.update({int(k): WatcherPhase(v) for k, v in phases_data.items()})
             
             REMINDER_SCHEDULES.clear()
-            # Load both old reminder_flags and new reminder_schedules for backward compatibility
-            old_flags = state.get("reminder_flags", {})
-            new_schedules = state.get("reminder_schedules", {})
-            if new_schedules:
-                REMINDER_SCHEDULES.update({int(k): v for k, v in new_schedules.items()})
-            elif old_flags:
-                # TODO: Convert old flags to new schedules when possible
-                logger.warning("Found old reminder_flags format - may need manual conversion")
-                REMINDER_SCHEDULES.update({int(k): v for k, v in old_flags.items()})
+            REMINDER_SCHEDULES.update({int(k): v for k, v in state.get("reminder_schedules", {}).items()})
             
             STALE_COUNTERS.clear()
             STALE_COUNTERS.update({int(k): v for k, v in state.get("stale_counters", {}).items()})

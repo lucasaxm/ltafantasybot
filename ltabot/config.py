@@ -61,15 +61,13 @@ class Config:
     # LTA Fantasy API Configuration
     X_SESSION_TOKEN: str = os.getenv("X_SESSION_TOKEN", "").strip()
     
-    # Phase-specific polling intervals
-    PRE_MARKET_POLL_SECS: int = int(os.getenv("PRE_MARKET_POLL_SECS", "300"))
-    MARKET_OPEN_POLL_SECS: int = int(os.getenv("MARKET_OPEN_POLL_SECS", "120"))
-    LIVE_POLL_SECS: int = int(os.getenv("LIVE_POLL_SECS", "30"))
+    # Universal polling configuration
+    POLL_SECS: int = int(os.getenv("POLL_SECS", "30"))  # Base polling interval for all phases
     
-    # Stale detection and backoff
+    # Stale detection and backoff (applied to all polling phases)
     MAX_STALE_POLLS: int = int(os.getenv("MAX_STALE_POLLS", "12"))
-    LIVE_BACKOFF_MULTIPLIER: float = float(os.getenv("LIVE_BACKOFF_MULTIPLIER", "2.0"))
-    LIVE_MAX_POLL_SECS: int = int(os.getenv("LIVE_MAX_POLL_SECS", "900"))
+    BACKOFF_MULTIPLIER: float = float(os.getenv("BACKOFF_MULTIPLIER", "2.0"))
+    MAX_POLL_SECS: int = int(os.getenv("MAX_POLL_SECS", "900"))
 
     # API Endpoint Configuration
     LTA_API_URL: str = os.getenv("LTA_API_URL", "https://api.ltafantasy.com").strip()
@@ -97,13 +95,10 @@ BOT_TOKEN = config.BOT_TOKEN
 ALLOWED_USER_ID = config.ALLOWED_USER_ID
 X_SESSION_TOKEN = config.X_SESSION_TOKEN
 
-# Phase-specific polling configurations
-PRE_MARKET_POLL_SECS = config.PRE_MARKET_POLL_SECS
-MARKET_OPEN_POLL_SECS = config.MARKET_OPEN_POLL_SECS
-LIVE_POLL_SECS = config.LIVE_POLL_SECS
+# Universal polling configurations
+POLL_SECS = config.POLL_SECS
 MAX_STALE_POLLS = config.MAX_STALE_POLLS
-LIVE_BACKOFF_MULTIPLIER = config.LIVE_BACKOFF_MULTIPLIER
-LIVE_MAX_POLL_SECS = config.LIVE_MAX_POLL_SECS
+BACKOFF_MULTIPLIER = config.BACKOFF_MULTIPLIER
+MAX_POLL_SECS = config.MAX_POLL_SECS
 
-# Legacy compatibility
-POLL_SECS = LIVE_POLL_SECS
+# Legacy compatibility - removed phase-specific variables

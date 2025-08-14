@@ -7,12 +7,10 @@ from typing import Any, Dict, List, Tuple, Optional
 import aiohttp
 
 from .config import (
-    PRE_MARKET_POLL_SECS,
-    MARKET_OPEN_POLL_SECS, 
-    LIVE_POLL_SECS,
+    POLL_SECS,
     MAX_STALE_POLLS,
-    LIVE_BACKOFF_MULTIPLIER,
-    LIVE_MAX_POLL_SECS,
+    BACKOFF_MULTIPLIER,
+    MAX_POLL_SECS,
     logger,
 )
 from .http import make_session
@@ -45,6 +43,7 @@ from .state import (
     REMINDER_SCHEDULES,
     STALE_COUNTERS,
     CURRENT_BACKOFF,
+    PHASE_CHANGE_EVENTS,
     WatcherPhase,
 )
 from .storage import write_runtime_state
@@ -232,6 +231,7 @@ def cleanup_chat_data(chat_id: int):
     STALE_COUNTERS.pop(chat_id, None)
     CURRENT_BACKOFF.pop(chat_id, None)
     REMINDER_SCHEDULES.pop(chat_id, None)
+    PHASE_CHANGE_EVENTS.pop(chat_id, None)
     
     # Cancel any scheduled tasks for this chat
     if chat_id in SCHEDULED_TASKS:
@@ -251,6 +251,16 @@ def initialize_phase_state(chat_id: int, phase: WatcherPhase):
         REMINDER_SCHEDULES[chat_id] = {}
     if chat_id not in SCHEDULED_TASKS:
         SCHEDULED_TASKS[chat_id] = []
+    
+    # Initialize or trigger phase change event
+    if chat_id not in PHASE_CHANGE_EVENTS:
+        PHASE_CHANGE_EVENTS[chat_id] = asyncio.Event()
+    else:
+        # Trigger the event to wake up the main loop
+        PHASE_CHANGE_EVENTS[chat_id].set()
+        # Reset for next phase change
+        PHASE_CHANGE_EVENTS[chat_id] = asyncio.Event()
+    
     logger.debug(f"After initialization - WATCHER_PHASES: {WATCHER_PHASES}")
     logger.debug(f"After initialization - REMINDER_SCHEDULES: {REMINDER_SCHEDULES}")
     logger.debug(f"After initialization - STALE_COUNTERS: {STALE_COUNTERS}")
@@ -261,25 +271,27 @@ def initialize_phase_state(chat_id: int, phase: WatcherPhase):
         pass
 
 
-def get_phase_poll_interval(phase: WatcherPhase, chat_id: int) -> float:
-    """Get the appropriate polling interval for the current phase."""
-    base_interval = {
-        WatcherPhase.PRE_MARKET: PRE_MARKET_POLL_SECS,
-        WatcherPhase.MARKET_OPEN: MARKET_OPEN_POLL_SECS,
-        WatcherPhase.LIVE: LIVE_POLL_SECS,
-    }[phase]
+def get_phase_poll_interval(phase: WatcherPhase, chat_id: int) -> Optional[float]:
+    """Get the appropriate polling interval for the current phase. Returns None for event-driven phases."""
+    if phase == WatcherPhase.MARKET_OPEN:
+        # MARKET_OPEN is event-driven (scheduled reminders), no polling except during market close detection
+        return None
+        
+    # Use universal POLL_SECS as base interval for all polling phases
+    base_interval = POLL_SECS
     
-    # Apply backoff multiplier for LIVE phase
-    if phase == WatcherPhase.LIVE:
-        backoff = CURRENT_BACKOFF.get(chat_id, 1.0)
-        interval = min(base_interval * backoff, LIVE_MAX_POLL_SECS)
-        return float(interval)
+    # Apply backoff multiplier for all phases based on stale counter
+    if chat_id in CURRENT_BACKOFF and CURRENT_BACKOFF[chat_id] > 1.0:
+        backoff = CURRENT_BACKOFF[chat_id]
+        interval = min(base_interval * backoff, MAX_POLL_SECS)
+        logger.debug(f"Applying backoff {backoff}x to {phase.value}: {interval}s (max: {MAX_POLL_SECS}s)")
+        return interval
     
     return float(base_interval)
 
 
 def update_stale_counter(chat_id: int, has_changes: bool):
-    """Update stale counter and backoff for LIVE phase."""
+    """Update stale counter and backoff for all polling phases."""
     if has_changes:
         # Reset stale counter and backoff when changes are detected
         STALE_COUNTERS[chat_id] = 0
@@ -289,12 +301,15 @@ def update_stale_counter(chat_id: int, has_changes: bool):
         STALE_COUNTERS[chat_id] = STALE_COUNTERS.get(chat_id, 0) + 1
         
         if STALE_COUNTERS[chat_id] >= MAX_STALE_POLLS:
+            # Calculate max backoff based on universal polling settings
+            max_backoff = MAX_POLL_SECS / POLL_SECS
             new_backoff = min(
-                CURRENT_BACKOFF.get(chat_id, 1.0) * LIVE_BACKOFF_MULTIPLIER,
-                LIVE_MAX_POLL_SECS / LIVE_POLL_SECS
+                CURRENT_BACKOFF.get(chat_id, 1.0) * BACKOFF_MULTIPLIER,
+                max_backoff
             )
             CURRENT_BACKOFF[chat_id] = new_backoff
             logger.debug(f"Applied backoff {new_backoff:.1f}x for chat {chat_id}")
+            STALE_COUNTERS[chat_id] = 0  # Reset counter after applying backoff
 
 
 def _create_reminder_task(delay: float, callback_func, chat_id: int, description: str = "reminder"):
@@ -317,6 +332,61 @@ def _create_reminder_task(delay: float, callback_func, chat_id: int, description
         task = asyncio.create_task(asyncio.sleep(delay))
         task.add_done_callback(lambda _: asyncio.create_task(delayed_callback()) if not task.cancelled() else None)
         return task
+
+
+def _start_market_close_polling(chat_id: int, league: str, bot):
+    """
+    Start continuous polling for API status change from 'market_open' to 'in_progress'.
+    Uses universal polling system with backoff. No timeout - keeps polling until state changes.
+    Returns immediately, polling runs in background task.
+    """
+    logger.info(f"Starting market close polling for {league} chat {chat_id}")
+    
+    async def poll_for_status_change():
+        try:
+            poll_count = 0
+            current_interval = POLL_SECS
+            
+            while True:
+                try:
+                    async with make_session() as session:
+                        rounds = await get_rounds(session, league)
+                        latest_round = pick_latest_round(rounds) if rounds else None
+                        
+                    if latest_round and latest_round.get("status") == "in_progress":
+                        # Success! API shows the round is now in progress
+                        initialize_phase_state(chat_id, WatcherPhase.LIVE)
+                        logger.info(f"✅ API confirmed round in_progress, transitioned to LIVE for chat {chat_id}")
+                        return
+                    
+                    # Status not changed yet, apply universal backoff logic
+                    poll_count += 1
+                    if poll_count >= MAX_STALE_POLLS:
+                        # Apply backoff
+                        max_backoff = MAX_POLL_SECS / POLL_SECS
+                        backoff_factor = min(BACKOFF_MULTIPLIER ** (poll_count // MAX_STALE_POLLS), max_backoff)
+                        current_interval = POLL_SECS * backoff_factor
+                        logger.debug(f"Market close polling backoff {backoff_factor:.1f}x -> {current_interval}s for chat {chat_id}")
+                    
+                    if poll_count % 10 == 0:  # Log every 10 polls
+                        round_status = latest_round.get('status', 'unknown') if latest_round else 'no_round'
+                        logger.info(f"⏳ Still waiting for round status change (currently: {round_status}) for chat {chat_id} [poll #{poll_count}]")
+                    
+                    await asyncio.sleep(current_interval)
+                    
+                except Exception as e:
+                    logger.warning(f"Error during market close polling for chat {chat_id}: {e}")
+                    await asyncio.sleep(current_interval)
+            
+        except Exception as e:
+            logger.error(f"Failed market close polling for chat {chat_id}: {e}")
+            # Emergency fallback - still transition to avoid getting stuck
+            initialize_phase_state(chat_id, WatcherPhase.LIVE)
+    
+    # Start the polling task (non-blocking)
+    task = asyncio.create_task(poll_for_status_change())
+    SCHEDULED_TASKS[chat_id].append(task)
+    logger.info(f"Started market close polling task for {league} chat {chat_id}")
 
 
 def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, Any], bot):
@@ -437,6 +507,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                         parse_mode="HTML"
                     )
                     mark_reminder_sent(schedule, "closed_transition")
+                    # Start polling for actual API status change (non-blocking)
+                    _start_market_close_polling(chat_id, league, bot)
                 
                 # Schedule immediate execution
                 task = asyncio.create_task(trigger_close_transition())
@@ -451,6 +523,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                         parse_mode="HTML"
                     )
                     mark_reminder_sent(schedule, "closed_transition")
+                    # Start polling for actual API status change (non-blocking)
+                    _start_market_close_polling(chat_id, league, bot)
                 
                 task = _create_reminder_task(time_to_close, trigger_close_transition, chat_id, "market close")
                 if task:
@@ -699,34 +773,10 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
     return None
 
 
-async def _handle_market_open_phase(chat_id: int, league: str, bot=None) -> Optional[WatcherPhase]:
-    """Handle MARKET_OPEN phase logic. Returns new phase if transition occurs."""
-    async with make_session() as session:
-        rounds = await get_rounds(session, league)
-        latest_round = pick_latest_round(rounds) if rounds else None
-    
-    if latest_round and latest_round.get("status") == "in_progress":
-        # Transition to LIVE
-        initialize_phase_state(chat_id, WatcherPhase.LIVE)
-        logger.info(f"Transitioned to LIVE for chat {chat_id}")
-        
-        # Send market closed message
-        if bot:
-            try:
-                await bot.send_message(
-                    chat_id,
-                    "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.error(f"Failed to send market closed message for chat {chat_id}: {e}")
-        
-        try:
-            write_runtime_state(list(WATCHERS.keys()))
-        except Exception:
-            pass
-        return WatcherPhase.LIVE
-    
+def _handle_market_open_phase() -> Optional[WatcherPhase]:
+    """Handle MARKET_OPEN phase logic. No polling needed - uses datetime-based scheduling only."""
+    # No polling needed in MARKET_OPEN phase - all transitions are handled by scheduled tasks
+    # The scheduled market close task will trigger the transition to LIVE when needed
     return None
 
 
@@ -795,7 +845,7 @@ async def _execute_phase_logic(current_phase: WatcherPhase, chat_id: int, league
         return new_phase, save_counter
         
     elif current_phase == WatcherPhase.MARKET_OPEN:
-        new_phase = await _handle_market_open_phase(chat_id, league, bot)
+        new_phase = _handle_market_open_phase()
         return new_phase, save_counter
         
     elif current_phase == WatcherPhase.LIVE:
@@ -923,10 +973,30 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
 
             # Wait for next poll or stop event
             poll_interval = get_phase_poll_interval(current_phase, chat_id)
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
-            except asyncio.TimeoutError:
-                pass
+            
+            if poll_interval is None:
+                # Event-driven phase (MARKET_OPEN) - wait for phase change event or stop event
+                phase_change_event = PHASE_CHANGE_EVENTS.get(chat_id)
+                if phase_change_event:
+                    done, pending = await asyncio.wait(
+                        [
+                            asyncio.create_task(stop_event.wait()),
+                            asyncio.create_task(phase_change_event.wait())
+                        ],
+                        return_when=asyncio.FIRST_COMPLETED
+                    )
+                    # Cancel pending tasks
+                    for task in pending:
+                        task.cancel()
+                else:
+                    # Fallback - just wait for stop event
+                    await stop_event.wait()
+            else:
+                # Polling phase - wait for timeout or stop event
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=poll_interval)
+                except asyncio.TimeoutError:
+                    pass
 
     finally:
         # Always cleanup on exit

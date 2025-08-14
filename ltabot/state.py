@@ -28,6 +28,9 @@ REMINDER_SCHEDULES: Dict[int, Dict[str, Dict[str, Any]]] = {}
 STALE_COUNTERS: Dict[int, int] = {}
 CURRENT_BACKOFF: Dict[int, float] = {}
 
+# Phase change events to wake up main loops from scheduled tasks
+PHASE_CHANGE_EVENTS: Dict[int, asyncio.Event] = {}
+
 # Persistent files
 GROUP_SETTINGS_FILE = "group_settings.json"
 RUNTIME_STATE_FILE = "runtime_state.json"
