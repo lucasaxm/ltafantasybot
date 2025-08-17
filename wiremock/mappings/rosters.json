@@ -1,0 +1,128 @@
+{
+  "mappings": [
+    {
+      "id": "77777777-8888-9999-aaaa-bbbbbbbbbbbb",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/([^/]+)/([^/]+)"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "roster-default.json"
+      }
+    },
+    {
+      "id": "88888888-9999-aaaa-bbbb-cccccccccccc",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "MARKET_OPEN",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_4/([^/]+)"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"Unauthorized access to current round during market open\"}"
+      }
+    },
+    {
+      "id": "99999999-aaaa-bbbb-cccc-dddddddddddd",
+      "scenarioName": "API_PHASE", 
+      "requiredScenarioState": "MARKET_OPEN_1H",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_4/([^/]+)"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"Unauthorized access to current round during market open\"}"
+      }
+    },
+    {
+      "id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "MARKET_OPEN_24H",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_4/([^/]+)"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"Unauthorized access to current round during market open\"}"
+      }
+    },
+    {
+      "id": "beeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_5/([^/]+)"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"Unauthorized access to current round during market open\"}"
+      }
+    },
+    {
+      "id": "bccccccc-cccc-cccc-cccc-cccccccccccc",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN_24H",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_5/([^/]+)"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"Unauthorized access to current round during market open\"}"
+      }
+    },
+    {
+      "id": "bddddddd-dddd-dddd-dddd-dddddddddddd",
+      "scenarioName": "API_PHASE",
+      "requiredScenarioState": "ROUND5_MARKET_OPEN_1H",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_5/([^/]+)"
+      },
+      "response": {
+        "status": 401,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "body": "{\"error\": \"Unauthorized access to current round during market open\"}"
+      }
+    },
+    {
+      "id": "cfcfcfcf-cfcf-cfcf-cfcf-cfcfcfcfcfcf",
+      "request": {
+        "method": "GET",
+        "urlPathPattern": "/rosters/per-round/round_5/([^/]+)"
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "application/json"
+        },
+        "bodyFileName": "roster-round5.json"
+      }
+    }
+  ]
+}

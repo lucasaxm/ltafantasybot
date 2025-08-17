@@ -69,7 +69,7 @@ case "$1" in
         activate_venv
         
         # Start bot with better error handling
-        nohup python3 "$BOT_SCRIPT" > "$LOG_FILE" 2>&1 &
+        nohup python3 "$BOT_SCRIPT" >> "$LOG_FILE" 2>&1 &
         BOT_PID=$!
         echo $BOT_PID > "$PID_FILE"
         
