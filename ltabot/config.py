@@ -1,5 +1,8 @@
 import os
 import logging
+from functools import wraps
+from typing import Callable, Any
+from cachetools import TTLCache
 
 
 def load_env() -> None:
@@ -104,3 +107,37 @@ BACKOFF_MULTIPLIER = config.BACKOFF_MULTIPLIER
 MAX_POLL_SECS = config.MAX_POLL_SECS
 
 # Legacy compatibility - removed phase-specific variables
+
+# API Caching Configuration
+# Cache TTL is 80% of polling interval to ensure fresh data before next poll
+CACHE_TTL = max(int(POLL_SECS * 0.8), 5)  # Minimum 5 seconds
+api_cache = TTLCache(maxsize=200, ttl=CACHE_TTL)
+
+def cached_api_call(cache_key_func: Callable[..., str]):
+    """
+    Decorator for caching API calls with TTL based on polling interval.
+    
+    Args:
+        cache_key_func: Function that generates cache key from function arguments
+    """
+    def decorator(func: Callable):
+        @wraps(func)
+        async def wrapper(*args, **kwargs):
+            # Generate cache key
+            key = cache_key_func(*args, **kwargs)
+            
+            # Check cache first
+            if key in api_cache:
+                logger.debug(f"Cache hit for: {key}")
+                return api_cache[key]
+            
+            # Call original function
+            logger.debug(f"Cache miss, calling API for: {key}")
+            result = await func(*args, **kwargs)
+            
+            # Store in cache
+            api_cache[key] = result
+            logger.debug(f"Cached result for: {key}")
+            return result
+        return wrapper
+    return decorator

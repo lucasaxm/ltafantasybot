@@ -4,10 +4,11 @@ from typing import Any, Dict, List, Optional
 
 import aiohttp
 
-from .config import BASE
+from .config import BASE, cached_api_call
 from .http import fetch_json
 
 
+@cached_api_call(lambda session, league_slug: f"rounds:{league_slug}")
 async def get_rounds(session: aiohttp.ClientSession, league_slug: str) -> List[Dict[str, Any]]:
     data = await fetch_json(session, f"{BASE}/leagues/{league_slug}/rounds")
     return data.get("data", [])
@@ -38,22 +39,26 @@ def pick_latest_round(rounds: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return sorted(rounds, key=ts, reverse=True)[0] if rounds else None
 
 
+@cached_api_call(lambda session, league_slug, round_id: f"ranking:{league_slug}:{round_id}")
 async def get_league_ranking(session: aiohttp.ClientSession, league_slug: str, round_id: str) -> List[Dict[str, Any]]:
     data = await fetch_json(session, f"{BASE}/leagues/{league_slug}/ranking", params={"roundId": round_id, "orderBy": "split_score"})
     return data.get("data", [])
 
 
+@cached_api_call(lambda session, round_id, team_id: f"roster:{round_id}:{team_id}")
 async def get_team_round_roster(session: aiohttp.ClientSession, round_id: str, team_id: str) -> Dict[str, Any]:
     data = await fetch_json(session, f"{BASE}/rosters/per-round/{round_id}/{team_id}")
     return data.get("data", {})
 
 
+@cached_api_call(lambda session, user_team_id: f"user_team_stats:{user_team_id}")
 async def get_user_team_round_stats(session: aiohttp.ClientSession, user_team_id: str) -> List[Dict[str, Any]]:
     """Get all round statistics for a specific user team using the efficient new endpoint."""
     data = await fetch_json(session, f"{BASE}/user-teams/{user_team_id}/round-stats")
     return data.get("data", [])
 
 
+@cached_api_call(lambda session, league_slug, search_term, search_type: f"find_team:{league_slug}:{search_term}:{search_type}")
 async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug: str, search_term: str, search_type: str) -> Optional[Dict[str, Any]]:
     rounds = await get_rounds(session, league_slug)
     if not rounds:
