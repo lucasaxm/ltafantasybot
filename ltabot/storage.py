@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from .config import logger
@@ -12,6 +12,7 @@ from .state import (
     RUNTIME_STATE_FILE,
     WatcherPhase,
 )
+from .state import LAST_SCORE_CHANGE_AT, IS_STALE
 
 
 def load_group_settings() -> None:
@@ -49,6 +50,7 @@ def load_runtime_state() -> None:
                 LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
                 WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF, WatcherPhase
             )
+            from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS
             
             # Clear and update the actual state variables
             LAST_SCORES.clear()
@@ -77,6 +79,15 @@ def load_runtime_state() -> None:
             CURRENT_BACKOFF.clear()
             CURRENT_BACKOFF.update({int(k): v for k, v in state.get("current_backoff", {}).items()})
             
+            LAST_SCORE_CHANGE_AT.clear()
+            LAST_SCORE_CHANGE_AT.update({int(k): v for k, v in state.get("last_score_change_at", {}).items()})
+
+            IS_STALE.clear()
+            IS_STALE.update({int(k): v for k, v in state.get("is_stale", {}).items()})
+
+            NO_CHANGE_POLLS.clear()
+            NO_CHANGE_POLLS.update({int(k): v for k, v in state.get("no_change_polls", {}).items()})
+
             active_chats_count = len(state.get("active_chats", []))
             logger.info(f"Loaded runtime state for {active_chats_count} chats")
             logger.debug(f"Loaded WATCHER_PHASES: {WATCHER_PHASES}")
@@ -95,6 +106,7 @@ def save_runtime_state() -> None:
             LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
             WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF
         )
+        from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS
         
         # WATCHERS list is maintained in watchers module; defer active_chats collection there
         state = {
@@ -106,7 +118,9 @@ def save_runtime_state() -> None:
             "reminder_schedules": {str(k): v for k, v in REMINDER_SCHEDULES.items()},
             "stale_counters": {str(k): v for k, v in STALE_COUNTERS.items()},
             "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
-            "last_updated": datetime.now().isoformat(),
+            "last_score_change_at": {str(k): v for k, v in LAST_SCORE_CHANGE_AT.items()},
+            "is_stale": {str(k): v for k, v in IS_STALE.items()},
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         with open(RUNTIME_STATE_FILE, "w") as f:
             json.dump(state, f, indent=2)
@@ -121,6 +135,7 @@ def write_runtime_state(active_chats: List[int]) -> None:
         LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
         WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF
     )
+    from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS
     
     try:
         # Debug logging to see what state variables contain
@@ -140,7 +155,10 @@ def write_runtime_state(active_chats: List[int]) -> None:
             "reminder_schedules": {str(k): v for k, v in REMINDER_SCHEDULES.items()},
             "stale_counters": {str(k): v for k, v in STALE_COUNTERS.items()},
             "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
-            "last_updated": datetime.now().isoformat(),
+            "last_score_change_at": {str(k): v for k, v in LAST_SCORE_CHANGE_AT.items()},
+            "is_stale": {str(k): v for k, v in IS_STALE.items()},
+            "no_change_polls": {str(k): v for k, v in NO_CHANGE_POLLS.items()},
+            "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         with open(RUNTIME_STATE_FILE, "w") as f:
             json.dump(state, f, indent=2)

@@ -42,9 +42,12 @@ def fmt_standings(
     message = f"{title}\n\n" + ("\n".join(lines) if lines else "<i>No teams</i>")
 
     if include_timestamp:
-        from datetime import datetime
-        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        message += f"\n\n🕒 <i>Updated at {current_time}</i>"
+        from .formatting import format_brt_time
+        from datetime import datetime, timezone
+        # Always use UTC for base time, then convert to BRT
+        current_utc = datetime.now(timezone.utc).isoformat()
+        brt_time = format_brt_time(current_utc)
+        message += f"\n\n🕒 <i>Atualizado às {brt_time}</i>"
 
     return message
 

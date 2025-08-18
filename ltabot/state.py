@@ -27,6 +27,9 @@ SCHEDULED_TASKS: Dict[int, List[asyncio.Task]] = {}
 REMINDER_SCHEDULES: Dict[int, Dict[str, Dict[str, Any]]] = {}
 STALE_COUNTERS: Dict[int, int] = {}
 CURRENT_BACKOFF: Dict[int, float] = {}
+LAST_SCORE_CHANGE_AT: Dict[int, str] = {}
+IS_STALE: Dict[int, bool] = {}
+NO_CHANGE_POLLS: Dict[int, int] = {}
 
 # Phase change events to wake up main loops from scheduled tasks
 PHASE_CHANGE_EVENTS: Dict[int, asyncio.Event] = {}

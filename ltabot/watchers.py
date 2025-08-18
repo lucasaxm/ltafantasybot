@@ -45,6 +45,9 @@ from .state import (
     CURRENT_BACKOFF,
     PHASE_CHANGE_EVENTS,
     WatcherPhase,
+    LAST_SCORE_CHANGE_AT,
+    IS_STALE,
+    NO_CHANGE_POLLS,
 )
 from .storage import write_runtime_state
 
@@ -198,17 +201,43 @@ async def send_split_ranking_change_notification(bot, chat_id: int, league: str,
 
 async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool):
     """Send new message or edit existing watch message."""
+    # Check if message content has changed
+    current_hash = hash_payload(message)
+    if not force_new and chat_id in LAST_SENT_HASH and LAST_SENT_HASH[chat_id] == current_hash:
+        logger.debug(f"Message content unchanged for chat {chat_id}, skipping edit/send")
+        return
+    
+    # Always try to edit first if we have a message ID and not forcing new
     if chat_id in WATCH_MESSAGE_IDS and not force_new:
         try:
-            await bot.edit_message_text(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id], text=message, parse_mode="HTML")
+            await bot.edit_message_text(
+                chat_id=chat_id, 
+                message_id=WATCH_MESSAGE_IDS[chat_id], 
+                text=message, 
+                parse_mode="HTML"
+            )
+            logger.debug(f"Successfully edited message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id}")
+            LAST_SENT_HASH[chat_id] = current_hash
             return
-        except Exception:
-            pass
+        except Exception as e:
+            # Check if it's just "Message is not modified" error - treat as success
+            if "Message is not modified" in str(e):
+                logger.debug(f"Message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id} unchanged (as expected)")
+                LAST_SENT_HASH[chat_id] = current_hash
+                return
+            
+            logger.warning(f"Failed to edit message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id}: {e}")
+            # Clear the message ID since it's no longer valid
+            WATCH_MESSAGE_IDS.pop(chat_id, None)
+    
+    # Send new message
     try:
         sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
         WATCH_MESSAGE_IDS[chat_id] = sent_message.message_id
-    except Exception:
-        pass
+        LAST_SENT_HASH[chat_id] = current_hash
+        logger.debug(f"Sent new message {sent_message.message_id} for chat {chat_id}")
+    except Exception as e:
+        logger.error(f"Failed to send message to chat {chat_id}: {e}")
 
 
 def update_tracking_data(chat_id: int, current_scores: Dict[str, float], current_ranking: List[str], 
@@ -217,7 +246,12 @@ def update_tracking_data(chat_id: int, current_scores: Dict[str, float], current
     LAST_SCORES[chat_id] = current_scores.copy()
     LAST_RANKINGS[chat_id] = current_ranking.copy()
     LAST_SPLIT_RANKINGS[chat_id] = current_split_ranking.copy()
-    LAST_SENT_HASH[chat_id] = hash_payload(message)
+    # Store UTC time internally, format to BRT only for display
+    from datetime import datetime, timezone
+    # Only update LAST_SCORE_CHANGE_AT if any score actually changed (arrow up/down in message)
+    if any(sym in message for sym in ["⬆️", "⬇️"]):
+        current_utc = datetime.now(timezone.utc).isoformat()
+        LAST_SCORE_CHANGE_AT[chat_id] = current_utc
 
 
 def cleanup_chat_data(chat_id: int):
@@ -232,6 +266,9 @@ def cleanup_chat_data(chat_id: int):
     CURRENT_BACKOFF.pop(chat_id, None)
     REMINDER_SCHEDULES.pop(chat_id, None)
     PHASE_CHANGE_EVENTS.pop(chat_id, None)
+    LAST_SCORE_CHANGE_AT.pop(chat_id, None)
+    IS_STALE.pop(chat_id, None)
+    NO_CHANGE_POLLS.pop(chat_id, None)
     
     # Cancel any scheduled tasks for this chat
     if chat_id in SCHEDULED_TASKS:
@@ -245,12 +282,22 @@ def initialize_phase_state(chat_id: int, phase: WatcherPhase):
     """Initialize the phase state for a chat."""
     logger.debug(f"initialize_phase_state called for chat {chat_id} with phase {phase.value}")
     WATCHER_PHASES[chat_id] = phase
-    STALE_COUNTERS[chat_id] = 0
-    CURRENT_BACKOFF[chat_id] = 1.0
+    # Only initialize counters if they don't already exist (preserves loaded state)
+    if chat_id not in STALE_COUNTERS:
+        STALE_COUNTERS[chat_id] = 0
+    if chat_id not in CURRENT_BACKOFF:
+        CURRENT_BACKOFF[chat_id] = 1.0
     if chat_id not in REMINDER_SCHEDULES:
         REMINDER_SCHEDULES[chat_id] = {}
     if chat_id not in SCHEDULED_TASKS:
         SCHEDULED_TASKS[chat_id] = []
+    
+    # Initialize LAST_SCORE_CHANGE_AT when starting LIVE phase tracking
+    # This ensures we have a baseline timestamp even if no changes occur during this session
+    if phase == WatcherPhase.LIVE and chat_id not in LAST_SCORE_CHANGE_AT:
+        from datetime import datetime, timezone
+        LAST_SCORE_CHANGE_AT[chat_id] = datetime.now(timezone.utc).isoformat()
+        logger.debug(f"Initialized LAST_SCORE_CHANGE_AT for chat {chat_id} at start of LIVE tracking")
     
     # Initialize or trigger phase change event
     if chat_id not in PHASE_CHANGE_EVENTS:
@@ -700,11 +747,22 @@ async def process_score_and_ranking_changes(chat_id: int, league: str, current_r
     split_ranking_changed = check_split_ranking_changed(chat_id, current_split_ranking)
     
     message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True, score_type="Round")
+    # Append last change time if available (format UTC to BRT for display)
+    last_change_utc = LAST_SCORE_CHANGE_AT.get(chat_id)
+    if last_change_utc:
+        from .formatting import format_brt_time
+        last_change_brt = format_brt_time(last_change_utc)
+        message += f"\n<i>Última mudança de pontuação: {last_change_brt}</i>"
+    # Add stale warning if currently stale
+    if IS_STALE.get(chat_id):
+        message += "\n⚠️ <b>Sem atualizações recentes</b> (pausa de jogo/intervalo/API lenta)"
     
     if split_ranking_changed and chat_id in LAST_SPLIT_RANKINGS and not is_resumed:
         await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data)
     
-    await send_or_edit_message(bot, chat_id, message, split_ranking_changed and not is_resumed)
+    # Force new message if split ranking changed to ensure visibility
+    force_new = split_ranking_changed and not is_resumed
+    await send_or_edit_message(bot, chat_id, message, force_new)
     
     return score_changes, split_ranking_changed
 
@@ -820,8 +878,7 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
 
         # Process changes and send notifications
         score_changes, split_ranking_changed = await process_score_and_ranking_changes(
-            chat_id, league, current_round, current_scores, current_split_ranking,
-            split_teams_data, teams_data, is_resumed, bot
+            chat_id, league, current_round, current_scores, current_split_ranking, split_teams_data, teams_data, is_resumed, bot
         )
 
         # Update tracking data
@@ -831,7 +888,50 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
 
         # Update stale counter and backoff
         has_changes = split_ranking_changed or any(arrow != "" for arrow in score_changes.values())
+        previous_stale = IS_STALE.get(chat_id, False)
         update_stale_counter(chat_id, has_changes)
+        # Maintain separate no-change poll counter for clear stale threshold
+        if has_changes:
+            NO_CHANGE_POLLS[chat_id] = 0
+        else:
+            NO_CHANGE_POLLS[chat_id] = NO_CHANGE_POLLS.get(chat_id, 0) + 1
+        # Enter stale if threshold reached
+        if not has_changes and NO_CHANGE_POLLS.get(chat_id, 0) >= MAX_STALE_POLLS and not previous_stale:
+            IS_STALE[chat_id] = True
+        # Recover from stale if we have changes
+        if has_changes and previous_stale:
+            IS_STALE[chat_id] = False
+            # Recovery announcement: delete old stale message and send notification
+            if chat_id in WATCH_MESSAGE_IDS:
+                try:
+                    await bot.delete_message(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id])
+                    logger.info(f"Deleted stale message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id}")
+                    WATCH_MESSAGE_IDS.pop(chat_id, None)
+                except Exception as e:
+                    logger.warning(f"Failed to delete stale message for chat {chat_id}: {e}")
+            # Send recovery notification before new live message
+            recovery_msg = "✅ <b>Placar AO VIVO voltou!</b> Novas atualizações detectadas."
+            try:
+                await bot.send_message(chat_id, recovery_msg, parse_mode="HTML")
+                logger.info(f"Sent recovery notification to chat {chat_id}")
+            except Exception as e:
+                logger.error(f"Failed to send recovery notification to chat {chat_id}: {e}")
+        # If just entered stale, edit existing message to show warning  
+        elif IS_STALE.get(chat_id) and not previous_stale:
+            if chat_id in WATCH_MESSAGE_IDS:
+                try:
+                    from .formatting import format_brt_time
+                    stale_note = "\n⚠️ <b>Sem atualizações recentes</b> (pausa de jogo/intervalo/API lenta)"
+                    latest_message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True, score_type="Round")
+                    last_change_utc = LAST_SCORE_CHANGE_AT.get(chat_id)
+                    if last_change_utc:
+                        last_change_brt = format_brt_time(last_change_utc)
+                        latest_message += f"\n<i>Última mudança de pontuação: {last_change_brt}</i>"
+                    latest_message += stale_note
+                    await bot.edit_message_text(chat_id=chat_id, message_id=WATCH_MESSAGE_IDS[chat_id], text=latest_message, parse_mode="HTML")
+                    logger.info(f"Added stale warning to message {WATCH_MESSAGE_IDS[chat_id]} for chat {chat_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to add stale warning to message for chat {chat_id}: {e}")
 
         # Save state if needed
         if should_save_state(save_counter, split_ranking_changed, score_changes):
