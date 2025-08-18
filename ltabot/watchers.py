@@ -936,7 +936,8 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
         latest_round = pick_latest_round(rounds) if rounds else None
         
     if latest_round and latest_round.get("status") == "market_open":
-        # Transition to MARKET_OPEN
+        # Transition to MARKET_OPEN - reset stale counter since this is a change
+        update_stale_counter(chat_id, True)
         initialize_phase_state(chat_id, WatcherPhase.MARKET_OPEN)
         
         # Send market open notification
@@ -977,6 +978,11 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
         except Exception:
             pass
         return WatcherPhase.MARKET_OPEN
+    
+    # No phase transition - apply stale detection for backoff in PRE_MARKET
+    # Since there are no meaningful changes to track in pre_market, 
+    # we consider every poll without a phase transition as "no changes"
+    update_stale_counter(chat_id, False)
     
     return None
 
