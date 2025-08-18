@@ -89,44 +89,75 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def _send_scores_response(update: Update, league: str):
-    """Send scores response, showing both API and partial ranking for live/pre_market phases."""
+    """Send scores response with chart visualization and text data as caption."""
     from .watchers import gather_live_scores, calculate_partial_ranking
     from .api import get_rounds, pick_latest_round, determine_phase_from_round
     from .http import make_session
+    from .charts import generate_race_chart, get_all_teams_round_stats
     
-    # Get current phase
+    # Use a single session for all API calls to avoid duplicates
     async with make_session() as session:
+        # Get current phase and prepare text data (single API call)
         rounds = await get_rounds(session, league)
         latest_round = pick_latest_round(rounds) if rounds else None
-    
-    phase_name = determine_phase_from_round(latest_round)
-    
-    # Get the standard API ranking
-    msg, _ = await gather_live_scores(league)
-    
-    # For live and pre_market phases, also show the calculated partial ranking
-    if phase_name.lower() in ["live", "pre_market"]:
+        phase_name = determine_phase_from_round(latest_round)
+        
+        # For live, pre_market, and market_open phases, use calculated partial ranking only
+        if phase_name.lower() in ["live", "pre_market", "market_open"]:
+            try:
+                # Calculate partial ranking (will make optimized API calls)
+                _, partial_teams_data = await calculate_partial_ranking(league)
+                if partial_teams_data:
+                    from .formatting import fmt_standings
+                    # Create a fake round object for formatting
+                    fake_round = {"name": "Ranking Parcial", "status": phase_name.lower()}
+                    caption_text = fmt_standings(league, fake_round, partial_teams_data, score_type="Parcial")
+                    
+                    # Add warning prefix only for live phase
+                    if phase_name.lower() == "live":
+                        warning_prefix = "⚠️ <i>Live tournament - scores updating in real time</i>\n\n"
+                        caption_text = warning_prefix + caption_text
+                        
+                    # For chart data, reuse the same teams data if available
+                    # Get teams_data for chart generation (reuse session)
+                    teams_data = await get_all_teams_round_stats(session, league)
+                else:
+                    # Fallback to API ranking
+                    msg, _ = await gather_live_scores(league)
+                    caption_text = msg
+                    teams_data = await get_all_teams_round_stats(session, league)
+            except Exception as e:
+                # If there's an error calculating partial ranking, use API ranking
+                logger.warning(f"Failed to calculate partial ranking for /scores: {e}")
+                msg, _ = await gather_live_scores(league)
+                caption_text = msg
+                teams_data = await get_all_teams_round_stats(session, league)
+        else:
+            # For other phases, use the standard API ranking
+            msg, _ = await gather_live_scores(league)
+            caption_text = msg
+            teams_data = await get_all_teams_round_stats(session, league)
+        
+        # Try to generate and send chart with text as caption
         try:
-            _, partial_teams_data = await calculate_partial_ranking(league)
-            if partial_teams_data:
-                from .formatting import fmt_standings
-                # Create a fake round object for formatting
-                fake_round = {"name": "Ranking Parcial", "status": phase_name.lower()}
-                partial_msg = fmt_standings(league, fake_round, partial_teams_data, score_type="Parcial")
-                
-                # Combine both messages
-                combined_msg = msg + "\n\n" + "─" * 30 + "\n\n" + partial_msg
-                await update.message.reply_text(combined_msg, parse_mode="HTML")
+            if teams_data:
+                chart_buffer = generate_race_chart(teams_data)
+                if chart_buffer:
+                    await update.message.reply_photo(
+                        photo=chart_buffer,
+                        caption=caption_text,
+                        parse_mode="HTML"
+                    )
+                    return
+                else:
+                    logger.warning("Chart generation failed, falling back to text only")
             else:
-                # No partial ranking available, just show the API ranking
-                await update.message.reply_text(msg, parse_mode="HTML")
+                logger.warning("No chart data available, falling back to text only")
         except Exception as e:
-            # If there's an error calculating partial ranking, just show the API ranking
-            logger.warning(f"Failed to calculate partial ranking for /scores: {e}")
-            await update.message.reply_text(msg, parse_mode="HTML")
-    else:
-        # For other phases, just show the standard API ranking
-        await update.message.reply_text(msg, parse_mode="HTML")
+            logger.warning(f"Chart generation failed: {e}, falling back to text only")
+    
+    # Fallback to text-only response if chart fails
+    await update.message.reply_text(caption_text, parse_mode="HTML")
 
 
 async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

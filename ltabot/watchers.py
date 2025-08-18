@@ -18,6 +18,7 @@ from .api import (
     get_rounds,
     get_league_ranking,
     get_team_round_roster,
+    get_user_team_round_stats,
     pick_latest_round,
     pick_current_round,
     pick_previous_round,
@@ -159,24 +160,19 @@ async def get_structured_split_ranking(league: str, round_id: str):
 
 async def calculate_partial_ranking_optimized(league: str) -> Tuple[List[str], List[Tuple[int, str, str, float]]]:
     """
-    Optimized partial ranking calculation with caching for completed rounds.
-    Uses direct /rosters/per-round/:roundId/:userTeamId calls as suggested.
+    Optimized partial ranking calculation using the new /user-teams/{id}/round-stats endpoint.
+    Makes only O(teams) API calls instead of O(teams × rounds).
     """
     async with make_session() as session:
+        # Get team list from latest round
         rounds = await get_rounds(session, league)
         if not rounds:
             return [], []
         
-        # Get all rounds that are either completed or in_progress
-        relevant_rounds = [r for r in rounds if r.get("status") in ["completed", "in_progress"]]
-        if not relevant_rounds:
+        latest_round = pick_latest_round(rounds)
+        if not latest_round:
             return [], []
-        
-        # Sort by round index to ensure proper order
-        relevant_rounds.sort(key=lambda r: r.get("indexInSplit", 0))
-        
-        # We need to get the team list once - use the latest round for this
-        latest_round = relevant_rounds[-1]
+            
         ranking = await get_league_ranking(session, league, latest_round["id"])
         if not ranking:
             return [], []
@@ -185,46 +181,44 @@ async def calculate_partial_ranking_optimized(league: str) -> Tuple[List[str], L
         teams_info = [(item["userTeam"]["id"], item["userTeam"]["name"], item["userTeam"].get("ownerName") or "—") 
                      for item in ranking]
         
-        # Aggregate scores per team across all relevant rounds
-        team_totals: Dict[str, float] = {team_name: 0.0 for _, team_name, _ in teams_info}
-        team_owners: Dict[str, str] = {team_name: owner_name for _, team_name, owner_name in teams_info}
+        # Get all round stats for each team using the efficient new endpoint
+        team_totals: Dict[str, float] = {}
+        team_owners: Dict[str, str] = {}
         
-        for round_obj in relevant_rounds:
-            round_id = round_obj["id"]
-            round_status = round_obj.get("status", "")
-            
+        for team_id, team_name, owner_name in teams_info:
             try:
-                if round_status == "completed" and round_id in COMPLETED_ROUND_CACHE:
-                    # Use cached results for completed rounds
-                    logger.debug(f"Using cached results for completed round {round_id}")
-                    cached_results = COMPLETED_ROUND_CACHE[round_id]
-                    for team_name, score in cached_results.items():
-                        if team_name in team_totals:
-                            team_totals[team_name] += score
-                else:
-                    # Fetch live data or cache completed round
-                    round_scores = {}
-                    for team_id, team_name, owner_name in teams_info:
-                        try:
-                            roster = await get_team_round_roster(session, round_id, team_id)
-                            rr = roster.get("roundRoster") or {}
-                            pts = rr.get("pointsPartial")
-                            if pts is None:
-                                pts = rr.get("points") or 0.0
-                            round_scores[team_name] = float(pts)
-                            team_totals[team_name] += float(pts)
-                        except Exception as e:
-                            logger.warning(f"Could not get roster for team {team_name} ({team_id}) in round {round_id}: {e}")
-                            continue
-                    
-                    # Cache completed rounds
-                    if round_status == "completed":
-                        COMPLETED_ROUND_CACHE[round_id] = round_scores
-                        logger.debug(f"Cached results for completed round {round_id}: {len(round_scores)} teams")
-                        
+                # Single API call gets all round data for this team
+                round_stats = await get_user_team_round_stats(session, team_id)
+                
+                total_score = 0.0
+                for round_stat in round_stats:
+                    round_status = round_stat.get("status", "")
+                    if round_status in ["completed", "in_progress"]:
+                        # For completed rounds, use the score from round-stats
+                        # For in_progress rounds, score will be null, so get live score
+                        score = round_stat.get("score")
+                        if score is not None:
+                            total_score += float(score)
+                        elif round_status == "in_progress":
+                            # Get live score for in_progress round
+                            try:
+                                round_id = round_stat["id"]
+                                roster = await get_team_round_roster(session, round_id, team_id)
+                                rr = roster.get("roundRoster") or {}
+                                live_pts = rr.get("pointsPartial")
+                                if live_pts is None:
+                                    live_pts = rr.get("points") or 0.0
+                                total_score += float(live_pts)
+                            except Exception as e:
+                                logger.warning(f"Could not get live score for team {team_name} in round {round_id}: {e}")
+                
+                team_totals[team_name] = total_score
+                team_owners[team_name] = owner_name
+                
             except Exception as e:
-                logger.warning(f"Could not process round {round_id} (status: {round_status}): {e}")
-                continue
+                logger.warning(f"Could not get round stats for team {team_name} ({team_id}): {e}")
+                team_totals[team_name] = 0.0
+                team_owners[team_name] = owner_name
         
         # Convert to sorted list for formatting
         team_results = [(team_name, team_owners[team_name], total_score) 

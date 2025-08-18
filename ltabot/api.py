@@ -48,6 +48,12 @@ async def get_team_round_roster(session: aiohttp.ClientSession, round_id: str, t
     return data.get("data", {})
 
 
+async def get_user_team_round_stats(session: aiohttp.ClientSession, user_team_id: str) -> List[Dict[str, Any]]:
+    """Get all round statistics for a specific user team using the efficient new endpoint."""
+    data = await fetch_json(session, f"{BASE}/user-teams/{user_team_id}/round-stats")
+    return data.get("data", [])
+
+
 async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug: str, search_term: str, search_type: str) -> Optional[Dict[str, Any]]:
     rounds = await get_rounds(session, league_slug)
     if not rounds:
