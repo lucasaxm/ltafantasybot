@@ -81,12 +81,52 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     try:
-        msg, _ = await gather_live_scores(league)
-        await update.message.reply_text(msg, parse_mode="HTML")
+        await _send_scores_response(update, league)
     except PermissionError as e:
         await update.message.reply_text(f"🔐 {e}")
     except Exception as e:
         await update.message.reply_text(f"❌ Error: {e}")
+
+
+async def _send_scores_response(update: Update, league: str):
+    """Send scores response, showing both API and partial ranking for live/pre_market phases."""
+    from .watchers import gather_live_scores, calculate_partial_ranking
+    from .api import get_rounds, pick_latest_round, determine_phase_from_round
+    from .http import make_session
+    
+    # Get current phase
+    async with make_session() as session:
+        rounds = await get_rounds(session, league)
+        latest_round = pick_latest_round(rounds) if rounds else None
+    
+    phase_name = determine_phase_from_round(latest_round)
+    
+    # Get the standard API ranking
+    msg, _ = await gather_live_scores(league)
+    
+    # For live and pre_market phases, also show the calculated partial ranking
+    if phase_name.lower() in ["live", "pre_market"]:
+        try:
+            _, partial_teams_data = await calculate_partial_ranking(league)
+            if partial_teams_data:
+                from .formatting import fmt_standings
+                # Create a fake round object for formatting
+                fake_round = {"name": "Ranking Parcial", "status": phase_name.lower()}
+                partial_msg = fmt_standings(league, fake_round, partial_teams_data, score_type="Parcial")
+                
+                # Combine both messages
+                combined_msg = msg + "\n\n" + "─" * 30 + "\n\n" + partial_msg
+                await update.message.reply_text(combined_msg, parse_mode="HTML")
+            else:
+                # No partial ranking available, just show the API ranking
+                await update.message.reply_text(msg, parse_mode="HTML")
+        except Exception as e:
+            # If there's an error calculating partial ranking, just show the API ranking
+            logger.warning(f"Failed to calculate partial ranking for /scores: {e}")
+            await update.message.reply_text(msg, parse_mode="HTML")
+    else:
+        # For other phases, just show the standard API ranking
+        await update.message.reply_text(msg, parse_mode="HTML")
 
 
 async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

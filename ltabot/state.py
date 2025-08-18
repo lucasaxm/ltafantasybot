@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from enum import Enum
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 
 class WatcherPhase(Enum):
@@ -19,6 +19,9 @@ WATCH_MESSAGE_IDS: Dict[int, int] = {}
 LAST_SCORES: Dict[int, Dict[str, float]] = {}
 LAST_RANKINGS: Dict[int, List[str]] = {}
 LAST_SPLIT_RANKINGS: Dict[int, List[str]] = {}
+LAST_PARTIAL_RANKINGS: Dict[int, List[str]] = {}  # For calculated partial ranking
+CACHED_PARTIAL_RANKINGS: Dict[int, Tuple[List[str], List[Tuple[int, str, str, float]]]] = {}  # Cache for expensive partial ranking calculation
+COMPLETED_ROUND_CACHE: Dict[str, Dict[str, float]] = {}  # Cache completed round results: round_id -> {team_id -> score}
 FIRST_POLL_AFTER_RESUME: Dict[int, bool] = {}
 
 # Phase-based state tracking

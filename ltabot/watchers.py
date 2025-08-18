@@ -37,6 +37,9 @@ from .state import (
     LAST_SCORES,
     LAST_RANKINGS,
     LAST_SPLIT_RANKINGS,
+    LAST_PARTIAL_RANKINGS,
+    CACHED_PARTIAL_RANKINGS,
+    COMPLETED_ROUND_CACHE,
     FIRST_POLL_AFTER_RESUME,
     WATCHER_PHASES,
     SCHEDULED_TASKS,
@@ -154,6 +157,125 @@ async def get_structured_split_ranking(league: str, round_id: str):
         return split_ranking, teams_data
 
 
+async def calculate_partial_ranking_optimized(league: str) -> Tuple[List[str], List[Tuple[int, str, str, float]]]:
+    """
+    Optimized partial ranking calculation with caching for completed rounds.
+    Uses direct /rosters/per-round/:roundId/:userTeamId calls as suggested.
+    """
+    async with make_session() as session:
+        rounds = await get_rounds(session, league)
+        if not rounds:
+            return [], []
+        
+        # Get all rounds that are either completed or in_progress
+        relevant_rounds = [r for r in rounds if r.get("status") in ["completed", "in_progress"]]
+        if not relevant_rounds:
+            return [], []
+        
+        # Sort by round index to ensure proper order
+        relevant_rounds.sort(key=lambda r: r.get("indexInSplit", 0))
+        
+        # We need to get the team list once - use the latest round for this
+        latest_round = relevant_rounds[-1]
+        ranking = await get_league_ranking(session, league, latest_round["id"])
+        if not ranking:
+            return [], []
+            
+        # Build team list with IDs, names, and owners
+        teams_info = [(item["userTeam"]["id"], item["userTeam"]["name"], item["userTeam"].get("ownerName") or "—") 
+                     for item in ranking]
+        
+        # Aggregate scores per team across all relevant rounds
+        team_totals: Dict[str, float] = {team_name: 0.0 for _, team_name, _ in teams_info}
+        team_owners: Dict[str, str] = {team_name: owner_name for _, team_name, owner_name in teams_info}
+        
+        for round_obj in relevant_rounds:
+            round_id = round_obj["id"]
+            round_status = round_obj.get("status", "")
+            
+            try:
+                if round_status == "completed" and round_id in COMPLETED_ROUND_CACHE:
+                    # Use cached results for completed rounds
+                    logger.debug(f"Using cached results for completed round {round_id}")
+                    cached_results = COMPLETED_ROUND_CACHE[round_id]
+                    for team_name, score in cached_results.items():
+                        if team_name in team_totals:
+                            team_totals[team_name] += score
+                else:
+                    # Fetch live data or cache completed round
+                    round_scores = {}
+                    for team_id, team_name, owner_name in teams_info:
+                        try:
+                            roster = await get_team_round_roster(session, round_id, team_id)
+                            rr = roster.get("roundRoster") or {}
+                            pts = rr.get("pointsPartial")
+                            if pts is None:
+                                pts = rr.get("points") or 0.0
+                            round_scores[team_name] = float(pts)
+                            team_totals[team_name] += float(pts)
+                        except Exception as e:
+                            logger.warning(f"Could not get roster for team {team_name} ({team_id}) in round {round_id}: {e}")
+                            continue
+                    
+                    # Cache completed rounds
+                    if round_status == "completed":
+                        COMPLETED_ROUND_CACHE[round_id] = round_scores
+                        logger.debug(f"Cached results for completed round {round_id}: {len(round_scores)} teams")
+                        
+            except Exception as e:
+                logger.warning(f"Could not process round {round_id} (status: {round_status}): {e}")
+                continue
+        
+        # Convert to sorted list for formatting
+        team_results = [(team_name, team_owners[team_name], total_score) 
+                       for team_name, total_score in team_totals.items()]
+        team_results.sort(key=lambda x: x[2], reverse=True)  # Sort by total score desc
+        
+        # Add rank numbers
+        teams_data = [(i+1, team_name, owner_name, total_score) 
+                     for i, (team_name, owner_name, total_score) in enumerate(team_results)]
+        ranking_list = [team_name for _, team_name, _, _ in teams_data]
+        
+        return ranking_list, teams_data
+
+
+async def calculate_partial_ranking(league: str) -> Tuple[List[str], List[Tuple[int, str, str, float]]]:
+    """
+    Calculate partial ranking by summing scores from all completed AND in_progress rounds.
+    Uses caching for completed rounds to optimize API calls.
+    Returns (ranking_list, teams_data) where teams_data contains calculated totals.
+    """
+    # Use the optimized version
+    return await calculate_partial_ranking_optimized(league)
+
+
+async def get_cached_partial_ranking(chat_id: int, league: str, force_refresh: bool = False) -> Tuple[List[str], List[Tuple[int, str, str, float]]]:
+    """
+    Get partial ranking with caching to avoid expensive recalculation during live phase polling.
+    Recalculates when cache is empty, when force_refresh=True, or when we detect changes.
+    """
+    # For live phase polling, use cached version if available and not forcing refresh
+    if not force_refresh and chat_id in CACHED_PARTIAL_RANKINGS:
+        return CACHED_PARTIAL_RANKINGS[chat_id]
+    
+    # Calculate and cache
+    ranking_list, teams_data = await calculate_partial_ranking(league)
+    CACHED_PARTIAL_RANKINGS[chat_id] = (ranking_list, teams_data)
+    return ranking_list, teams_data
+
+
+def invalidate_partial_ranking_cache(chat_id: int):
+    """Invalidate the partial ranking cache for a chat (e.g., when rounds complete)."""
+    CACHED_PARTIAL_RANKINGS.pop(chat_id, None)
+
+
+def invalidate_completed_round_cache():
+    """Invalidate completed round cache when new rounds are detected."""
+    global COMPLETED_ROUND_CACHE
+    COMPLETED_ROUND_CACHE.clear()
+    logger.info("Cleared completed round cache")
+
+
 def calculate_score_changes(chat_id: int, current_scores: Dict[str, float]) -> Dict[str, str]:
     """Calculate score changes between polls."""
     score_changes: Dict[str, str] = {}
@@ -185,6 +307,13 @@ def check_split_ranking_changed(chat_id: int, current_split_ranking: List[str]) 
     return chat_id not in LAST_SPLIT_RANKINGS or LAST_SPLIT_RANKINGS[chat_id] != current_split_ranking
 
 
+def check_partial_ranking_changed(chat_id: int, current_partial_ranking: List[str]) -> bool:
+    """Check if partial (calculated) ranking has changed since last poll."""
+    if FIRST_POLL_AFTER_RESUME.get(chat_id, False):
+        return False
+    return chat_id not in LAST_PARTIAL_RANKINGS or LAST_PARTIAL_RANKINGS[chat_id] != current_partial_ranking
+
+
 async def send_ranking_change_notification(bot, chat_id: int, league: str, current_round, teams_data):
     """Send ranking change notification."""
     ranking_msg = "🔄 <b>RANKING CHANGED!</b>\n\n"
@@ -196,6 +325,15 @@ async def send_split_ranking_change_notification(bot, chat_id: int, league: str,
     """Send split ranking change notification."""
     ranking_msg = "🔄 <b>SPLIT RANKING CHANGED!</b>\n\n"
     ranking_msg += fmt_standings(league, current_round, split_teams_data, score_type="Split")
+    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
+
+
+async def send_partial_ranking_change_notification(bot, chat_id: int, league: str, partial_teams_data):
+    """Send partial ranking change notification."""
+    ranking_msg = "🔄 <b>RANKING CHANGED!</b>\n\n"
+    # Create a fake round object for formatting
+    fake_round = {"name": "Ranking Parcial", "status": "live"}
+    ranking_msg += fmt_standings(league, fake_round, partial_teams_data, score_type="Parcial")
     await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
 
 
@@ -241,11 +379,12 @@ async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool)
 
 
 def update_tracking_data(chat_id: int, current_scores: Dict[str, float], current_ranking: List[str], 
-                        current_split_ranking: List[str], message: str):
+                        current_split_ranking: List[str], current_partial_ranking: List[str], message: str):
     """Update tracking data for change detection."""
     LAST_SCORES[chat_id] = current_scores.copy()
     LAST_RANKINGS[chat_id] = current_ranking.copy()
     LAST_SPLIT_RANKINGS[chat_id] = current_split_ranking.copy()
+    LAST_PARTIAL_RANKINGS[chat_id] = current_partial_ranking.copy()
     # Store UTC time internally, format to BRT only for display
     from datetime import datetime, timezone
     # Only update LAST_SCORE_CHANGE_AT if any score actually changed (arrow up/down in message)
@@ -259,6 +398,8 @@ def cleanup_chat_data(chat_id: int):
     LAST_SCORES.pop(chat_id, None)
     LAST_RANKINGS.pop(chat_id, None)
     LAST_SPLIT_RANKINGS.pop(chat_id, None)
+    LAST_PARTIAL_RANKINGS.pop(chat_id, None)
+    CACHED_PARTIAL_RANKINGS.pop(chat_id, None)
     WATCH_MESSAGE_IDS.pop(chat_id, None)
     FIRST_POLL_AFTER_RESUME.pop(chat_id, None)
     WATCHER_PHASES.pop(chat_id, None)
@@ -711,6 +852,9 @@ async def handle_round_completion(chat_id: int, league: str, completed_round: Di
     round_id = completed_round.get('id', 'unknown')
     logger.info(f"🏁 HANDLE_ROUND_COMPLETION called for chat {chat_id}, round {round_name}")
     
+    # Invalidate partial ranking cache since we have a new completed round
+    invalidate_partial_ranking_cache(chat_id)
+    
     # Check if we already handled completion for this round to avoid duplicates
     completion_flag_key = f"completion_{league}_{round_id}"
     if chat_id in REMINDER_SCHEDULES and completion_flag_key in REMINDER_SCHEDULES[chat_id]:
@@ -741,10 +885,12 @@ async def handle_round_completion(chat_id: int, league: str, completed_round: Di
         await bot.send_message(chat_id, f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}", parse_mode="HTML")
 async def process_score_and_ranking_changes(chat_id: int, league: str, current_round, current_scores, 
                                           current_split_ranking, split_teams_data, teams_data, 
+                                          current_partial_ranking, partial_teams_data,
                                           is_resumed: bool, bot):
-    """Process score changes and split ranking changes, send notifications."""
+    """Process score changes and ranking changes, send notifications."""
     score_changes = calculate_score_changes(chat_id, current_scores) if not is_resumed else {}
     split_ranking_changed = check_split_ranking_changed(chat_id, current_split_ranking)
+    partial_ranking_changed = check_partial_ranking_changed(chat_id, current_partial_ranking)
     
     message = fmt_standings(league, current_round, teams_data, score_changes, include_timestamp=True, score_type="Round")
     # Append last change time if available (format UTC to BRT for display)
@@ -757,20 +903,26 @@ async def process_score_and_ranking_changes(chat_id: int, league: str, current_r
     if IS_STALE.get(chat_id):
         message += "\n⚠️ <b>Sem atualizações recentes</b> (pausa de jogo/intervalo/API lenta)"
     
+    # Use partial ranking change as the primary trigger for ranking change notifications during live phase
+    if partial_ranking_changed and chat_id in LAST_PARTIAL_RANKINGS and not is_resumed:
+        await send_partial_ranking_change_notification(bot, chat_id, league, partial_teams_data)
+    
+    # Still send split ranking notifications, but these are less frequent
     if split_ranking_changed and chat_id in LAST_SPLIT_RANKINGS and not is_resumed:
         await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data)
     
-    # Force new message if split ranking changed to ensure visibility
-    force_new = split_ranking_changed and not is_resumed
+    # Force new message if ranking changed to ensure visibility
+    force_new = (partial_ranking_changed or split_ranking_changed) and not is_resumed
     await send_or_edit_message(bot, chat_id, message, force_new)
     
-    return score_changes, split_ranking_changed
+    return score_changes, partial_ranking_changed, split_ranking_changed
 
 
-def should_save_state(save_counter: int, split_ranking_changed: bool, score_changes: dict) -> bool:
+def should_save_state(save_counter: int, partial_ranking_changed: bool, split_ranking_changed: bool, score_changes: dict) -> bool:
     """Determine if state should be saved based on conditions."""
     return (
         save_counter >= 3 or
+        partial_ranking_changed or
         split_ranking_changed or
         any(arrow != "" for arrow in score_changes.values())
     )
@@ -874,20 +1026,28 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
     
     if current_round:
         round_id = current_round["id"]
+        # Get split ranking (official API ranking for this round)
         current_split_ranking, split_teams_data = await get_structured_split_ranking(league, round_id)
+        
+        # Calculate partial ranking based on completed rounds + current round live scores
+        # Refresh cache if this is not a resumed session to get latest current round scores
+        force_refresh = not is_resumed
+        current_partial_ranking, partial_teams_data = await get_cached_partial_ranking(chat_id, league, force_refresh)
 
         # Process changes and send notifications
-        score_changes, split_ranking_changed = await process_score_and_ranking_changes(
-            chat_id, league, current_round, current_scores, current_split_ranking, split_teams_data, teams_data, is_resumed, bot
+        score_changes, partial_ranking_changed, split_ranking_changed = await process_score_and_ranking_changes(
+            chat_id, league, current_round, current_scores, current_split_ranking, split_teams_data, teams_data, 
+            current_partial_ranking, partial_teams_data, is_resumed, bot
         )
 
         # Update tracking data
         update_tracking_data(chat_id, current_scores, current_ranking, current_split_ranking, 
+                           current_partial_ranking,
                            fmt_standings(league, current_round, teams_data, score_changes, 
                                        include_timestamp=True, score_type="Round"))
 
         # Update stale counter and backoff
-        has_changes = split_ranking_changed or any(arrow != "" for arrow in score_changes.values())
+        has_changes = partial_ranking_changed or split_ranking_changed or any(arrow != "" for arrow in score_changes.values())
         previous_stale = IS_STALE.get(chat_id, False)
         update_stale_counter(chat_id, has_changes)
         # Maintain separate no-change poll counter for clear stale threshold
@@ -934,7 +1094,7 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
                     logger.warning(f"Failed to add stale warning to message for chat {chat_id}: {e}")
 
         # Save state if needed
-        if should_save_state(save_counter, split_ranking_changed, score_changes):
+        if should_save_state(save_counter, partial_ranking_changed, split_ranking_changed, score_changes):
             write_runtime_state(list(WATCHERS.keys()))
             save_counter = 0
     

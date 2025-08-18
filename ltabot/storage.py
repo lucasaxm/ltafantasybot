@@ -50,7 +50,7 @@ def load_runtime_state() -> None:
                 LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
                 WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF, WatcherPhase
             )
-            from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS
+            from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS, LAST_PARTIAL_RANKINGS, COMPLETED_ROUND_CACHE
             
             # Clear and update the actual state variables
             LAST_SCORES.clear()
@@ -61,6 +61,9 @@ def load_runtime_state() -> None:
             
             LAST_SPLIT_RANKINGS.clear()
             LAST_SPLIT_RANKINGS.update({int(k): v for k, v in state.get("last_split_rankings", {}).items()})
+            
+            LAST_PARTIAL_RANKINGS.clear()
+            LAST_PARTIAL_RANKINGS.update({int(k): v for k, v in state.get("last_partial_rankings", {}).items()})
             
             WATCH_MESSAGE_IDS.clear()
             WATCH_MESSAGE_IDS.update({int(k): v for k, v in state.get("watch_message_ids", {}).items()})
@@ -87,6 +90,9 @@ def load_runtime_state() -> None:
 
             NO_CHANGE_POLLS.clear()
             NO_CHANGE_POLLS.update({int(k): v for k, v in state.get("no_change_polls", {}).items()})
+            
+            COMPLETED_ROUND_CACHE.clear()
+            COMPLETED_ROUND_CACHE.update(state.get("completed_round_cache", {}))
 
             active_chats_count = len(state.get("active_chats", []))
             logger.info(f"Loaded runtime state for {active_chats_count} chats")
@@ -106,13 +112,14 @@ def save_runtime_state() -> None:
             LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
             WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF
         )
-        from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS
+        from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS, LAST_PARTIAL_RANKINGS, COMPLETED_ROUND_CACHE
         
         # WATCHERS list is maintained in watchers module; defer active_chats collection there
         state = {
             "last_scores": {str(k): v for k, v in LAST_SCORES.items()},
             "last_rankings": {str(k): v for k, v in LAST_RANKINGS.items()},
             "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
+            "last_partial_rankings": {str(k): v for k, v in LAST_PARTIAL_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
             "watcher_phases": {str(k): v.value for k, v in WATCHER_PHASES.items()},
             "reminder_schedules": {str(k): v for k, v in REMINDER_SCHEDULES.items()},
@@ -120,6 +127,7 @@ def save_runtime_state() -> None:
             "current_backoff": {str(k): v for k, v in CURRENT_BACKOFF.items()},
             "last_score_change_at": {str(k): v for k, v in LAST_SCORE_CHANGE_AT.items()},
             "is_stale": {str(k): v for k, v in IS_STALE.items()},
+            "completed_round_cache": COMPLETED_ROUND_CACHE,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         with open(RUNTIME_STATE_FILE, "w") as f:
@@ -135,7 +143,7 @@ def write_runtime_state(active_chats: List[int]) -> None:
         LAST_SCORES, LAST_RANKINGS, LAST_SPLIT_RANKINGS, WATCH_MESSAGE_IDS,
         WATCHER_PHASES, REMINDER_SCHEDULES, STALE_COUNTERS, CURRENT_BACKOFF
     )
-    from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS
+    from .state import LAST_SCORE_CHANGE_AT, IS_STALE, NO_CHANGE_POLLS, LAST_PARTIAL_RANKINGS, COMPLETED_ROUND_CACHE
     
     try:
         # Debug logging to see what state variables contain
@@ -150,6 +158,7 @@ def write_runtime_state(active_chats: List[int]) -> None:
             "last_scores": {str(k): v for k, v in LAST_SCORES.items()},
             "last_rankings": {str(k): v for k, v in LAST_RANKINGS.items()},
             "last_split_rankings": {str(k): v for k, v in LAST_SPLIT_RANKINGS.items()},
+            "last_partial_rankings": {str(k): v for k, v in LAST_PARTIAL_RANKINGS.items()},
             "watch_message_ids": {str(k): v for k, v in WATCH_MESSAGE_IDS.items()},
             "watcher_phases": {str(k): v.value for k, v in WATCHER_PHASES.items()},
             "reminder_schedules": {str(k): v for k, v in REMINDER_SCHEDULES.items()},
@@ -158,6 +167,7 @@ def write_runtime_state(active_chats: List[int]) -> None:
             "last_score_change_at": {str(k): v for k, v in LAST_SCORE_CHANGE_AT.items()},
             "is_stale": {str(k): v for k, v in IS_STALE.items()},
             "no_change_polls": {str(k): v for k, v in NO_CHANGE_POLLS.items()},
+            "completed_round_cache": COMPLETED_ROUND_CACHE,
             "last_updated": datetime.now(timezone.utc).isoformat(),
         }
         with open(RUNTIME_STATE_FILE, "w") as f:
