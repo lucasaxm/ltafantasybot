@@ -3,8 +3,4 @@ aiohttp==3.10.8
 python-dotenv==1.0.1
 matplotlib==3.8.2
 seaborn==0.13.0
-cachetools==5.5.0n-telegram-bot==21.6
-aiohttp==3.10.5
-python-dotenv==1.1.1
-matplotlib==3.8.2
-seaborn==0.13.0
+cachetools==5.5.0
