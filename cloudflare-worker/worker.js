@@ -19,6 +19,7 @@ async function handleRequest(request) {
   const allowedPaths = [
     '/leagues/',          // League information and rounds
     '/rosters/per-round/', // Team rosters and scores
+    '/user-teams/',       // User team round statistics
     '/users/me'           // User profile endpoint for authentication testing
   ];
   
