@@ -337,7 +337,7 @@ async def _handle_market_open_roster_fallback(session, league, search_term, sear
                 
                 try:
                     roster_data = await get_team_round_roster(session, previous_round["id"], team_id)
-                    message = fmt_team_details(team_info, previous_round, roster_data)
+                    message = await fmt_team_details(team_info, previous_round, roster_data)
                     message = "⚠️ <b>Mercado está aberto</b>; mostrando roster da rodada anterior e preços.\n\n" + message
                     await update.message.reply_text(message, parse_mode="HTML")
                     return True
@@ -403,6 +403,11 @@ async def _perform_lookup_and_reply(update: Update, league: str, search_term: st
     from .api import find_team_by_name_or_owner, get_team_round_roster
     from .formatting import fmt_team_details
     from .api import get_rounds, pick_previous_round
+    from .champions import ensure_champion_data_loaded
+    
+    # Ensure champion data is loaded for proper champion names
+    await ensure_champion_data_loaded()
+    
     try:
         async with make_session() as session:
             result = await find_team_by_name_or_owner(session, league, search_term, mode)
@@ -434,7 +439,7 @@ async def _perform_lookup_and_reply(update: Update, league: str, search_term: st
 
             try:
                 roster_data = await get_team_round_roster(session, round_id, team_id)
-                message = fmt_team_details(team_info, use_round_obj, roster_data)
+                message = await fmt_team_details(team_info, use_round_obj, roster_data)
                 if proactive_note:
                     message = proactive_note + message
                 await update.message.reply_text(message, parse_mode="HTML")

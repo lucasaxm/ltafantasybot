@@ -101,7 +101,7 @@ def format_score_details(details: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def fmt_team_details(team_info: Dict[str, Any], round_obj: Dict[str, Any], roster_data: Dict[str, Any]) -> str:
+async def fmt_team_details(team_info: Dict[str, Any], round_obj: Dict[str, Any], roster_data: Dict[str, Any]) -> str:
     team_name = _escape_html(team_info["userTeam"]["name"])
     owner_name = _escape_html(team_info["userTeam"].get("ownerName", "Unknown"))
     rank = team_info.get("rank", "?")
@@ -137,12 +137,12 @@ def fmt_team_details(team_info: Dict[str, Any], round_obj: Dict[str, Any], roste
     roster_players.sort(key=lambda p: role_order.index(p.get("role", "support")) if p.get("role") in role_order else 999)
 
     for player in roster_players:
-        message += format_player_section(player, role_emojis)
+        message += await format_player_section(player, role_emojis)
 
     return message.strip()
 
 
-def format_player_section(player: Dict[str, Any], role_emojis: Dict[str, str]) -> str:
+async def format_player_section(player: Dict[str, Any], role_emojis: Dict[str, str]) -> str:
     role = player.get("role", "")
     role_emoji = role_emojis.get(role, "🎮")
 
@@ -154,12 +154,36 @@ def format_player_section(player: Dict[str, Any], role_emojis: Dict[str, str]) -
     price = esports_player.get("preRoundPrice", 0)
     player_points = player.get("pointsPartial") or 0
 
+    # Build new UX format: check if owner's pick matches any game
+    owner_champion_id = player.get("championId")
+    pick_status_line = ""
+    
+    if owner_champion_id:
+        from .champions import get_champion_name
+        owner_champion_name = await get_champion_name(owner_champion_id)
+        
+        # Check if the picked champion was played in any game
+        games = player.get("games", [])
+        game_with_pick = None
+        for i, game in enumerate(games, 1):
+            game_champion_id = game.get("championId")
+            if game_champion_id and str(game_champion_id) == str(owner_champion_id):
+                game_with_pick = i
+                break
+        
+        if game_with_pick:
+            pick_status_line = f"✅ {owner_champion_name} (Game {game_with_pick})\n"
+        else:
+            pick_status_line = f"☑️ {owner_champion_name}\n"
+
     section = f"{role_emoji} <b>{player_name}</b> ({team_name_short})\n"
+    if pick_status_line:
+        section += pick_status_line
     section += f"💰 {price}M • 📊 <b>{player_points:.2f}</b> pts\n"
 
     games = player.get("games", [])
     if games:
-        games_text = format_games_details(games)
+        games_text = await format_games_details(games)
         if games_text:
             section += f"<blockquote expandable>{games_text.strip()}</blockquote>\n"
     else:
@@ -169,7 +193,7 @@ def format_player_section(player: Dict[str, Any], role_emojis: Dict[str, str]) -
     return section
 
 
-def format_games_details(games: List[Dict[str, Any]]) -> str:
+async def format_games_details(games: List[Dict[str, Any]]) -> str:
     games_text = ""
     for i, game in enumerate(games, 1):
         opponent = game.get("opponentTeam", {})
@@ -177,7 +201,16 @@ def format_games_details(games: List[Dict[str, Any]]) -> str:
         game_points = game.get("points", 0)
         multiplier = game.get("multiplier", 1)
         multiplier_text = f" (x{multiplier})" if multiplier != 1 else ""
-        games_text += f"<b>Game {i}</b> vs {opponent_name}: <b>{game_points:.2f}</b>{multiplier_text}\n"
+        
+        # Add champion information if available
+        champion_info = ""
+        champion_id = game.get("championId")
+        if champion_id:
+            from .champions import get_champion_name
+            champion_name = await get_champion_name(champion_id)
+            champion_info = f" ({champion_name})"
+        
+        games_text += f"<b>Game {i}</b> vs {opponent_name}: <b>{game_points:.2f}</b>{multiplier_text}{champion_info}\n"
 
         details = game.get("details", [])
         if details:

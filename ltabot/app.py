@@ -33,8 +33,17 @@ async def startup_health_check():
     """Perform health check on bot startup"""
     from .config import BASE, X_SESSION_TOKEN, logger
     from .http import make_session, fetch_json
+    from .champions import load_champion_data
     
     logger.info("🏥 Running startup health check...")
+    
+    # Initialize champion data
+    logger.info("🎮 Loading champion data...")
+    champion_data = await load_champion_data()
+    if champion_data:
+        logger.info("✅ Champion data loaded successfully")
+    else:
+        logger.warning("⚠️ Failed to load champion data - champion names will not be displayed")
     
     try:
         # Test LTA Fantasy authentication
