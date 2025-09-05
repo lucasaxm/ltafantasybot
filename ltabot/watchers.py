@@ -93,26 +93,31 @@ async def get_split_ranking(session: aiohttp.ClientSession, league_slug: str, ro
     return rows
 
 
-async def get_round_scores(session: aiohttp.ClientSession, league_slug: str, round_id: str) -> List[Tuple[int, str, str, float]]:
+async def get_round_scores(session: aiohttp.ClientSession, league_slug: str, round_id: str) -> List[Tuple[int, str, str, float, bool]]:
     """Get round scores for a specific round."""
     ranking = await get_league_ranking(session, league_slug, round_id)
 
-    async def get_team_round_score(item: Dict[str, Any]) -> Tuple[int, str, str, float]:
+    async def get_team_round_score(item: Dict[str, Any]) -> Tuple[int, str, str, float, bool]:
         rank = item.get("rank", 0)
         team = item["userTeam"]["name"]
         owner = item["userTeam"].get("ownerName") or "—"
         team_id = item["userTeam"]["id"]
         roster = await get_team_round_roster(session, round_id, team_id)
+        
+        # Check if team has no roster
+        if roster.get("no_roster", False):
+            return (rank, team, owner, 0.0, True)  # True indicates no roster
+            
         rr = (roster.get("roundRoster") or {})
         pts = rr.get("pointsPartial")
         if pts is None:
             pts = rr.get("points") or 0.0
-        return (rank, team, owner, float(pts))
+        return (rank, team, owner, float(pts), False)  # False indicates has roster
 
-    rows: List[Tuple[int, str, str, float]] = []
+    rows: List[Tuple[int, str, str, float, bool]] = []
     if ranking:
         rows = await asyncio.gather(*[get_team_round_score(it) for it in ranking])
-        rows.sort(key=lambda r: (-r[3], r[0]))
+        rows.sort(key=lambda r: (-r[3], r[0]))  # Sort by score desc, then by rank asc
 
     return rows
 
@@ -136,7 +141,7 @@ async def get_structured_scores(league: str):
 
         current_scores: Dict[str, float] = {}
         current_ranking: List[str] = []
-        for rank, team_name, owner_name, pts in teams_data:
+        for rank, team_name, owner_name, pts, no_roster in teams_data:
             current_scores[team_name] = pts
             current_ranking.append(team_name)
 
@@ -632,7 +637,7 @@ async def compute_and_send_split_ranking(chat_id: int, league: str, completed_ro
                 round_id = round_obj["id"]
                 try:
                     round_teams = await get_round_scores(session, league, round_id)
-                    for _, team_name, owner_name, round_score in round_teams:
+                    for _, team_name, owner_name, round_score, no_roster in round_teams:
                         if team_name in team_totals:
                             # Add to existing total
                             existing_owner, existing_total = team_totals[team_name]
