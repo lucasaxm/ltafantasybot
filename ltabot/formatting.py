@@ -11,7 +11,7 @@ def _escape_html(text: str) -> str:
 def fmt_standings(
     league_slug: str,
     round_obj: Dict[str, Any],
-    rows: List[Tuple[int, str, str, float]],
+    rows: List[Tuple[int, str, str, float]] | List[Tuple[int, str, str, float, bool]],
     score_changes: Dict[str, str] | None = None,
     include_timestamp: bool = False,
     score_type: str = "Round",
@@ -33,11 +33,18 @@ def fmt_standings(
             return f"{n:>2}."
 
     lines: List[str] = []
-    for r, t, o, p in rows:
+    for row in rows:
+        if len(row) == 5:  # New format with no_roster flag
+            r, t, o, p, no_roster = row
+            no_roster_flag = "🚫" if no_roster else ""
+        else:  # Legacy format for split scores
+            r, t, o, p = row
+            no_roster_flag = ""
+        
         arrow = (score_changes or {}).get(t, "")
         safe_team = _escape_html(t)
         safe_owner = _escape_html(o)
-        lines.append(f"{medal(r)} <b>{safe_team}</b> — {safe_owner} · <code>{p:.2f}</code> {arrow}")
+        lines.append(f"{medal(r)} <b>{safe_team}</b> — {safe_owner} · <code>{p:.2f}</code> {arrow} {no_roster_flag}")
 
     message = f"{title}\n\n" + ("\n".join(lines) if lines else "<i>No teams</i>")
 

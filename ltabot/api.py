@@ -47,8 +47,15 @@ async def get_league_ranking(session: aiohttp.ClientSession, league_slug: str, r
 
 @cached_api_call(lambda session, round_id, team_id: f"roster:{round_id}:{team_id}")
 async def get_team_round_roster(session: aiohttp.ClientSession, round_id: str, team_id: str) -> Dict[str, Any]:
-    data = await fetch_json(session, f"{BASE}/rosters/per-round/{round_id}/{team_id}")
-    return data.get("data", {})
+    try:
+        data = await fetch_json(session, f"{BASE}/rosters/per-round/{round_id}/{team_id}")
+        return data.get("data", {})
+    except RuntimeError as e:
+        if "HTTP 404" in str(e) and "Roster not found" in str(e):
+            # Team doesn't have a roster for this round
+            return {"no_roster": True}
+        # Re-raise for other types of errors
+        raise
 
 
 @cached_api_call(lambda session, user_team_id: f"user_team_stats:{user_team_id}")
