@@ -75,7 +75,7 @@ class Config:
     MAX_POLL_SECS: int = int(os.getenv("MAX_POLL_SECS", "900"))
 
     # API Endpoint Configuration
-    LTA_API_URL: str = os.getenv("LTA_API_URL", "https://api.ltafantasy.com").strip()
+    LTA_API_URL: str = os.getenv("LTA_API_URL", "https://api.cblol.gg").strip()
 
     @classmethod
     def validate_config(cls) -> None:

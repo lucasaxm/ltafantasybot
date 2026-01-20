@@ -60,15 +60,15 @@ def test_environment_variables():
 
 @pytest.mark.asyncio
 async def test_lta_authentication():
-    """Test LTA Fantasy API authentication using /users/me endpoint"""
-    print("🔐 Testing LTA Fantasy authentication...")
+    """Test CBLOL Fantasy API authentication using /users/me endpoint"""
+    print("🔐 Testing CBLOL Fantasy authentication...")
     
     session = make_session()
     try:
         # Test the user profile endpoint - better than /leagues/active
         user_data = await fetch_json(session, f'{BASE}/users/me')
         
-        assert user_data is not None, "No response from LTA API"
+        assert user_data is not None, "No response from CBLOL API"
         assert 'data' in user_data, "Invalid response format from /users/me endpoint"
         
         user_info = user_data['data']
@@ -77,20 +77,20 @@ async def test_lta_authentication():
         user_id = user_info.get('id', 'Unknown')[:8] + '...'  # Mask user ID
         
         print(f'✅ Authenticated as: {display_name}#{tag_line} (ID: {user_id})')
-        print('✅ LTA Fantasy API authentication successful')
+        print('✅ CBLOL Fantasy API authentication successful')
             
     except Exception as e:
         error_msg = str(e)
         if '401' in error_msg or 'Unauthorized' in error_msg:
             print('❌ Authentication failed - Session token invalid or expired')
-            print('Please update your X_SESSION_TOKEN in .env file')
-            pytest.fail("LTA API authentication failed - invalid session token")
+            print('Please update your X_SESSION_TOKEN in .env file with CBLOL token')
+            pytest.fail("CBLOL API authentication failed - invalid session token")
         elif '404' in error_msg:
             print('❌ Endpoint not found - Check if worker supports /users/me')
-            pytest.fail("LTA API endpoint not found")
+            pytest.fail("CBLOL API endpoint not found")
         else:
-            print(f'❌ LTA API authentication issue: {error_msg}')
-            pytest.fail(f"LTA API error: {error_msg}")
+            print(f'❌ CBLOL API authentication issue: {error_msg}')
+            pytest.fail(f"CBLOL API error: {error_msg}")
     finally:
         await session.close()
 

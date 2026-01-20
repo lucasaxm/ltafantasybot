@@ -139,8 +139,8 @@ async def fmt_team_details(team_info: Dict[str, Any], round_obj: Dict[str, Any],
         message += "<i>No roster data available</i>"
         return message
 
-    role_emojis = {"top": "⚔️", "jungle": "🌿", "mid": "🔮", "bottom": "🏹", "support": "🛡️"}
-    role_order = ["top", "jungle", "mid", "bottom", "support"]
+    role_emojis = {"top": "⚔️", "jungle": "🌿", "mid": "🔮", "bottom": "🏹", "support": "🛡️", "coach": "👔"}
+    role_order = ["top", "jungle", "mid", "bottom", "support", "coach"]
     roster_players.sort(key=lambda p: role_order.index(p.get("role", "support")) if p.get("role") in role_order else 999)
 
     for player in roster_players:
@@ -165,7 +165,8 @@ async def format_player_section(player: Dict[str, Any], role_emojis: Dict[str, s
     owner_champion_id = player.get("championId")
     pick_status_line = ""
     
-    if owner_champion_id:
+    # Skip champion display for coach role (championId is always -1)
+    if owner_champion_id and role != "coach":
         from .champions import get_champion_name
         owner_champion_name = await get_champion_name(owner_champion_id)
         
@@ -303,7 +304,7 @@ def _build_team_section(
         f"{pre_budget:.1f} → {post_budget:.1f} {budget_delta_text}"
     )
 
-    role_order = ["top", "jungle", "mid", "bottom", "support"]
+    role_order = ["top", "jungle", "mid", "bottom", "support", "coach"]
 
     if player_changes:
         sorted_player_changes = sorted(

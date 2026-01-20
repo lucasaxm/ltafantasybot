@@ -1,8 +1,8 @@
 /**
- * Cloudflare Worker Proxy for LTA Fantasy API
+ * Cloudflare Worker Proxy for CBLOL Fantasy API
  * 
  * This worker acts as a proxy to bypass Cloudflare challenges that
- * may block VPS deployments from directly accessing the LTA Fantasy API.
+ * may block VPS deployments from directly accessing the CBLOL Fantasy API.
  * 
  * It forwards only allowed API paths with the correct Bruno runtime
  * headers that bypass Cloudflare's bot detection.
@@ -28,16 +28,16 @@ async function handleRequest(request) {
     return new Response('Path not allowed', { status: 403 });
   }
   
-  // Build the target URL for LTA Fantasy API
-  const targetUrl = `https://api.ltafantasy.com${url.pathname}${url.search}`;
+  // Build the target URL for CBLOL Fantasy API
+  const targetUrl = `https://api.cblol.gg${url.pathname}${url.search}`;
   
   // Forward request with Bruno runtime headers that bypass Cloudflare
   const headers = {
     'Accept': '*/*',
     'Accept-Language': 'pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7',
     'User-Agent': 'bruno-runtime/2.9.0',  // Key header for bypass
-    'Origin': 'https://ltafantasy.com',
-    'Referer': 'https://ltafantasy.com/',
+    'Origin': 'https://cblol.gg',
+    'Referer': 'https://cblol.gg/',
     'Pragma': 'no-cache',
     'Cache-Control': 'no-cache',
     'DNT': '1'
