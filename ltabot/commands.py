@@ -83,9 +83,11 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         await _send_scores_response(update, league)
     except PermissionError as e:
-        await update.message.reply_text(f"🔐 {e}")
+        if update.message:
+            await update.message.reply_text(f"🔐 {e}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        if update.message:
+            await update.message.reply_text(f"❌ Error: {e}")
 
 
 async def _send_scores_response(update: Update, league: str):
@@ -449,9 +451,11 @@ async def _perform_lookup_and_reply(update: Update, league: str, search_term: st
                     return
                 raise
     except PermissionError as e:
-        await update.message.reply_text(f"🔐 {e}")
+        if update.message:
+            await update.message.reply_text(f"🔐 {e}")
     except Exception as e:
-        await update.message.reply_text(f"❌ Error: {e}")
+        if update.message:
+            await update.message.reply_text(f"❌ Error: {e}")
 
 
 async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

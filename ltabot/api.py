@@ -51,8 +51,9 @@ async def get_team_round_roster(session: aiohttp.ClientSession, round_id: str, t
         data = await fetch_json(session, f"{BASE}/rosters/per-round/{round_id}/{team_id}")
         return data.get("data", {})
     except RuntimeError as e:
-        if "HTTP 404" in str(e) and "Roster not found" in str(e):
-            # Team doesn't have a roster for this round
+        error_str = str(e)
+        if "HTTP 404" in error_str and ("Roster not found" in error_str or "ROUND_NOT_FOUND" in error_str):
+            # Team doesn't have a roster for this round (roster not created yet or round not found)
             return {"no_roster": True}
         # Re-raise for other types of errors
         raise
