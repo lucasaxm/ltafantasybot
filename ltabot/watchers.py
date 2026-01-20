@@ -732,6 +732,8 @@ async def _collect_team_budget_data(session: aiohttp.ClientSession, league: str,
     ranking = await get_league_ranking(session, league, round_id)
     previous_round = pick_previous_round(rounds, round_obj)
     
+    logger.debug(f"Collecting budget data for round {round_obj.get('name')}, previous_round={previous_round.get('name') if previous_round else None}")
+    
     team_budget_data = []
     for item in ranking:
         team_id = item["userTeam"]["id"]
@@ -746,6 +748,8 @@ async def _collect_team_budget_data(session: aiohttp.ClientSession, league: str,
                 
                 pre_budget = prev_round_roster.get("preRoundBudget", 0)
                 post_budget = prev_round_roster.get("postRoundBudget", 0)
+                
+                logger.debug(f"Team {team_name}: pre={pre_budget}, post={post_budget}, roster_keys={list(prev_round_roster.keys())}")
                 
                 # Get player price changes
                 player_changes = []
@@ -809,7 +813,7 @@ async def compute_and_send_split_ranking(chat_id: int, league: str, completed_ro
             
             # Get all rounds up to and including the completed round
             completed_index = completed_round.get("indexInSplit", 0)
-            split_rounds = [r for r in rounds if r.get("indexInSplit", 0) <= completed_index and r.get("indexInSplit", 0) > 0]
+            split_rounds = [r for r in rounds if r.get("indexInSplit", 0) <= completed_index and r.get("indexInSplit", 0) >= 0]
             split_rounds.sort(key=lambda r: r.get("indexInSplit", 0))
             
             # Aggregate scores per team across all split rounds

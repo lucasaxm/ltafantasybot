@@ -10,6 +10,21 @@ from .http import fetch_json
 
 @cached_api_call(lambda session, league_slug: f"rounds:{league_slug}")
 async def get_rounds(session: aiohttp.ClientSession, league_slug: str) -> List[Dict[str, Any]]:
+    """Get rounds for a league. Uses /user-teams endpoint if USER_TEAM_ID is configured (cleaner data)."""
+    from .config import USER_TEAM_ID
+    
+    # Prefer user-teams endpoint if configured (cleaner data, no duplicates)
+    if USER_TEAM_ID:
+        try:
+            data = await fetch_json(session, f"{BASE}/user-teams/{USER_TEAM_ID}/round-stats")
+            rounds = data.get("data", [])
+            if rounds:
+                return rounds
+        except Exception:
+            # Fall back to leagues endpoint if user-teams fails
+            pass
+    
+    # Fallback to leagues endpoint (may have duplicate/stale data)
     data = await fetch_json(session, f"{BASE}/leagues/{league_slug}/rounds")
     return data.get("data", [])
 
@@ -95,7 +110,7 @@ async def find_team_by_name_or_owner(session: aiohttp.ClientSession, league_slug
 def pick_previous_round(rounds: List[Dict[str, Any]], current_round: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Pick the previous round relative to the current round."""
     current_index = current_round.get("indexInSplit", -1)
-    if current_index <= 1:  # No previous round if we're at index 1 or invalid
+    if current_index < 1:  # No previous round if we're at index 0 or invalid
         return None
     
     # Look for round with indexInSplit = current_index - 1

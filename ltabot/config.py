@@ -63,8 +63,9 @@ class Config:
     BOT_TOKEN: str | None = os.getenv("BOT_TOKEN")
     ALLOWED_USER_ID: int = int(os.getenv("ALLOWED_USER_ID", "0"))
 
-    # LTA Fantasy API Configuration
+    # CBLOL Fantasy API Configuration
     X_SESSION_TOKEN: str = os.getenv("X_SESSION_TOKEN", "").strip()
+    USER_TEAM_ID: str = os.getenv("USER_TEAM_ID", "").strip()  # Optional: Your team ID for cleaner round data
     
     # Universal polling configuration
     POLL_SECS: int = int(os.getenv("POLL_SECS", "30"))  # Base polling interval for all phases
@@ -99,6 +100,7 @@ BASE = config.get_api_base_url()
 BOT_TOKEN = config.BOT_TOKEN
 ALLOWED_USER_ID = config.ALLOWED_USER_ID
 X_SESSION_TOKEN = config.X_SESSION_TOKEN
+USER_TEAM_ID = config.USER_TEAM_ID
 
 # Universal polling configurations
 POLL_SECS = config.POLL_SECS
