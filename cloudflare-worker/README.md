@@ -1,16 +1,16 @@
-# Cloudflare Worker Proxy for LTA Fantasy Bot
+# Cloudflare Worker Proxy for CBLOL Fantasy Bot
 
-This Cloudflare Worker acts as a proxy to bypass Cloudflare challenges that may block VPS deployments from directly accessing the LTA Fantasy API.
+This Cloudflare Worker acts as a proxy to bypass Cloudflare challenges that may block VPS deployments from directly accessing the CBLOL Fantasy API.
 
 ## When Do You Need This?
 
-If you're running the LTA Fantasy Bot on a VPS and encounter Cloudflare challenges that block direct API access, this worker provides a solution by proxying requests with the correct headers.
+If you're running the CBLOL Fantasy Bot on a VPS and encounter Cloudflare challenges that block direct API access, this worker provides a solution by proxying requests with the correct headers.
 
 ## How It Works
 
 The worker:
 - Receives requests from your bot
-- Forwards them to the LTA Fantasy API with Bruno runtime headers
+- Forwards them to the CBLOL Fantasy API with Bruno runtime headers
 - Returns the API response back to your bot
 - Only allows specific API paths for security
 - Automatically forwards session tokens for authentication
@@ -47,13 +47,13 @@ The worker:
 5. **Get your worker URL**:
    After deployment, you'll see output like:
    ```
-   ✅ Deployment complete! Take a flight over to https://lta-fantasy-proxy.your-subdomain.workers.dev
+   ✅ Deployment complete! Take a flight over to https://cblol-fantasy-proxy.your-subdomain.workers.dev
    ```
 
 6. **Configure your bot**:
    Update your bot's `.env` file to use the worker URL:
    ```bash
-   LTA_API_URL=https://lta-fantasy-proxy.your-subdomain.workers.dev
+   LTA_API_URL=https://cblol-fantasy-proxy.your-subdomain.workers.dev
    ```
 
 ## Available Scripts
@@ -78,14 +78,15 @@ npm run tail
 ## Allowed API Paths
 
 The worker only proxies these specific paths for security:
-- `/leagues/` - League information and rounds
-- `/rosters/per-round/` - Team rosters and scores  
+- `/leagues/` - League information, rounds, and rankings
+- `/rosters/per-round/` - Team rosters and scores per round
+- `/user-teams/` - User team round statistics (primary endpoint for round data)
 - `/users/me` - User profile endpoint for authentication testing
 
 ## Configuration
 
 The worker is configured via `wrangler.toml`:
-- **name**: `lta-fantasy-proxy` (you can customize this)
+- **name**: `cblol-fantasy-proxy` (you can customize this)
 - **compatibility_date**: Uses Cloudflare Workers runtime features
 - **main**: Points to `worker.js` as the entry point
 

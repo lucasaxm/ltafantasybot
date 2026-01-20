@@ -17,9 +17,9 @@ async function handleRequest(request) {
   
   // Security: Only allow specific API paths we need
   const allowedPaths = [
-    '/leagues/',          // League information and rounds
-    '/rosters/per-round/', // Team rosters and scores
-    '/user-teams/',       // User team round statistics
+    '/leagues/',          // League information, rounds, and rankings
+    '/rosters/per-round/', // Team rosters and scores per round
+    '/user-teams/',       // User team round statistics (primary endpoint for clean round data)
     '/users/me'           // User profile endpoint for authentication testing
   ];
   

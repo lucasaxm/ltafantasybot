@@ -1,8 +1,8 @@
-name = "lta-fantasy-proxy"
+name = "cblol-fantasy-proxy"
 main = "worker.js"
 compatibility_date = "2023-05-18"
 
-# Cloudflare Worker configuration for LTA Fantasy Bot proxy
+# Cloudflare Worker configuration for CBLOL Fantasy Bot proxy
 # This worker bypasses Cloudflare challenges for VPS deployments
 
 [env.production]
