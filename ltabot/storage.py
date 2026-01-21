@@ -188,14 +188,27 @@ def get_active_chats_to_resume() -> List[int]:
     return []
 
 
-def get_group_league(chat_id: int) -> Optional[str]:
-    return GROUP_SETTINGS.get(str(chat_id), {}).get("league")
+def get_group_league(chat_id: int) -> tuple[Optional[str], Optional[int]]:
+    """Returns tuple (league_slug, message_thread_id)"""
+    chat_settings = GROUP_SETTINGS.get(str(chat_id), {})
+    league = chat_settings.get("league")
+    thread_id = chat_settings.get("message_thread_id")
+    return (league, thread_id)
 
 
-def set_group_league(chat_id: int, league_slug: str) -> None:
+def get_group_thread_id(chat_id: int) -> Optional[int]:
+    """Helper to get just the message_thread_id for a group"""
+    return GROUP_SETTINGS.get(str(chat_id), {}).get("message_thread_id")
+
+
+def set_group_league(chat_id: int, league_slug: str, message_thread_id: Optional[int] = None) -> None:
     chat_key = str(chat_id)
     if chat_key not in GROUP_SETTINGS:
         GROUP_SETTINGS[chat_key] = {}
     GROUP_SETTINGS[chat_key]["league"] = league_slug
+    if message_thread_id is not None:
+        GROUP_SETTINGS[chat_key]["message_thread_id"] = message_thread_id
+        logger.info(f"Group {chat_id} attached to league '{league_slug}' in topic {message_thread_id}")
+    else:
+        logger.info(f"Group {chat_id} attached to league '{league_slug}'")
     save_group_settings()
-    logger.info(f"Group {chat_id} attached to league '{league_slug}'")

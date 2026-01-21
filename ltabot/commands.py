@@ -25,6 +25,9 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
+    
     if chat.type == "private":
         await update.message.reply_text(
             "🤖 <b>LTA Fantasy Bot</b>\n\n"
@@ -41,10 +44,13 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/startwatch - Start monitoring group's league\n"
             "/stopwatch - Stop monitoring",
             parse_mode="HTML",
+            message_thread_id=thread_id,
         )
     else:
-        league = get_group_league(chat.id)
+        league, stored_thread_id = get_group_league(chat.id)
         status = f"📊 Current league: <code>{league}</code>" if league else "❓ No league attached"
+        if stored_thread_id:
+            status += f" (topic {stored_thread_id})"
         await update.message.reply_text(
             f"🤖 <b>LTA Fantasy Bot</b> (Group Mode)\n\n{status}\n\n"
             "<b>Commands for All Members:</b>\n"
@@ -57,6 +63,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "/startwatch - Start live monitoring\n"
             "/stopwatch - Stop monitoring",
             parse_mode="HTML",
+            message_thread_id=thread_id,
         )
 
 
@@ -65,6 +72,8 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
 
     if chat.type == "private":
         if not context.args:
@@ -72,25 +81,26 @@ async def scores_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         league = context.args[0].strip()
     else:
-        league = get_group_league(chat.id)
+        league, _ = get_group_league(chat.id)
         if not league:
             await update.message.reply_text(
                 NO_LEAGUE_ATTACHED_MSG,
                 parse_mode="HTML",
+                message_thread_id=thread_id,
             )
             return
 
     try:
-        await _send_scores_response(update, league)
+        await _send_scores_response(update, league, thread_id)
     except PermissionError as e:
         if update.message:
-            await update.message.reply_text(f"🔐 {e}")
+            await update.message.reply_text(f"🔐 {e}", message_thread_id=thread_id)
     except Exception as e:
         if update.message:
-            await update.message.reply_text(f"❌ Error: {e}")
+            await update.message.reply_text(f"❌ Error: {e}", message_thread_id=thread_id)
 
 
-async def _send_scores_response(update: Update, league: str):
+async def _send_scores_response(update: Update, league: str, thread_id: Optional[int] = None):
     """Send scores response with chart visualization and text data as caption."""
     from .watchers import gather_live_scores, calculate_partial_ranking
     from .api import get_rounds, pick_latest_round, determine_phase_from_round
@@ -148,7 +158,8 @@ async def _send_scores_response(update: Update, league: str):
                     await update.message.reply_photo(
                         photo=chart_buffer,
                         caption=caption_text,
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     return
                 else:
@@ -159,7 +170,7 @@ async def _send_scores_response(update: Update, league: str):
             logger.warning(f"Chart generation failed: {e}, falling back to text only")
     
     # Fallback to text-only response if chart fails
-    await update.message.reply_text(caption_text, parse_mode="HTML")
+    await update.message.reply_text(caption_text, parse_mode="HTML", message_thread_id=thread_id)
 
 
 async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -167,12 +178,16 @@ async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
+    logger.info(f"setleague_cmd: chat_id={chat.id}, thread_id={thread_id}, is_forum={getattr(chat, 'is_forum', False)}")
+    
     if chat.type == "private":
-        await update.message.reply_text("❌ This command only works in groups.")
+        await update.message.reply_text("❌ This command only works in groups.", message_thread_id=thread_id)
         return
 
     if not context.args:
-        await update.message.reply_text("Usage: /setleague <league_slug>")
+        await update.message.reply_text("Usage: /setleague <league_slug>", message_thread_id=thread_id)
         return
 
     league_slug = context.args[0].strip()
@@ -181,14 +196,27 @@ async def setleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with make_session() as session:
             rounds = await get_rounds(session, league_slug)
             if not rounds:
-                await update.message.reply_text(f"❌ League <code>{league_slug}</code> not found or empty.")
+                await update.message.reply_text(
+                    f"❌ League <code>{league_slug}</code> not found or empty.",
+                    parse_mode="HTML",
+                    message_thread_id=thread_id,
+                )
                 return
     except Exception as e:
-        await update.message.reply_text(f"❌ Could not access league <code>{league_slug}</code>: {e}")
+        await update.message.reply_text(
+            f"❌ Could not access league <code>{league_slug}</code>: {e}",
+            parse_mode="HTML",
+            message_thread_id=thread_id,
+        )
         return
 
-    set_group_league(chat.id, league_slug)
-    await update.message.reply_text(f"✅ League set to <code>{league_slug}</code> for this group!", parse_mode="HTML")
+    set_group_league(chat.id, league_slug, thread_id)
+    topic_msg = f" in topic {thread_id}" if thread_id else ""
+    await update.message.reply_text(
+        f"✅ League set to <code>{league_slug}</code> for this group{topic_msg}!",
+        parse_mode="HTML",
+        message_thread_id=thread_id,
+    )
 
 
 async def getleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -196,17 +224,26 @@ async def getleague_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
+    
     if chat.type == "private":
-        await update.message.reply_text("❌ This command only works in groups.")
+        await update.message.reply_text("❌ This command only works in groups.", message_thread_id=thread_id)
         return
 
-    league = get_group_league(chat.id)
+    league, stored_thread_id = get_group_league(chat.id)
     if league:
-        await update.message.reply_text(f"📊 Current league: <code>{league}</code>", parse_mode="HTML")
+        topic_msg = f" in topic {stored_thread_id}" if stored_thread_id else ""
+        await update.message.reply_text(
+            f"📊 Current league: <code>{league}</code>{topic_msg}",
+            parse_mode="HTML",
+            message_thread_id=thread_id,
+        )
     else:
         await update.message.reply_text(
             "❓ No league attached to this group. Use <code>/setleague &lt;league_slug&gt;</code> to set one.",
             parse_mode="HTML",
+            message_thread_id=thread_id,
         )
 
 
@@ -253,21 +290,33 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
+    
     if chat.type == "private":
-        await update.message.reply_text("❌ Use <code>/watch &lt;league_slug&gt;</code> in private chats.", parse_mode="HTML")
+        await update.message.reply_text(
+            "❌ Use <code>/watch &lt;league_slug&gt;</code> in private chats.",
+            parse_mode="HTML",
+            message_thread_id=thread_id,
+        )
         return
 
-    league = get_group_league(chat.id)
+    league, _ = get_group_league(chat.id)
     if not league:
         await update.message.reply_text(
             NO_LEAGUE_ATTACHED_MSG,
             parse_mode="HTML",
+            message_thread_id=thread_id,
         )
         return
 
     chat_id = chat.id
     if chat_id in WATCHERS:
-        await update.message.reply_text(f"✅ Already watching <code>{league}</code>!", parse_mode="HTML")
+        await update.message.reply_text(
+            f"✅ Already watching <code>{league}</code>!",
+            parse_mode="HTML",
+            message_thread_id=thread_id,
+        )
         return
 
     start_watcher(chat_id, league, context.bot)
@@ -275,6 +324,7 @@ async def startwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         f"👀 Started watching <code>{league}</code> with dynamic intervals by phase!\nUse /stopwatch to stop.",
         parse_mode="HTML",
+        message_thread_id=thread_id,
     )
 
 
@@ -283,6 +333,8 @@ async def stopwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
     chat_id = chat.id
 
     if chat_id in WATCHERS:
@@ -293,9 +345,9 @@ async def stopwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             write_runtime_state(list(WATCHERS.keys()))
         except Exception:
             pass
-        await update.message.reply_text("🛑 Stopped watching.")
+        await update.message.reply_text("🛑 Stopped watching.", message_thread_id=thread_id)
     else:
-        await update.message.reply_text("❓ Not currently watching anything.")
+        await update.message.reply_text("❓ Not currently watching anything.", message_thread_id=thread_id)
 
 
 async def unwatch_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -318,7 +370,7 @@ async def auth_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("✅ Token updated in memory. Try /scores again.")
 
 
-async def _handle_market_open_roster_fallback(session, league, search_term, search_type, update):
+async def _handle_market_open_roster_fallback(session, league, search_term, search_type, update, thread_id: Optional[int] = None):
     """Handle roster fetch during market_open by falling back to previous round."""
     from .api import find_team_by_name_or_owner, get_team_round_roster, pick_previous_round, get_rounds
     from .formatting import fmt_team_details
@@ -341,7 +393,7 @@ async def _handle_market_open_roster_fallback(session, league, search_term, sear
                     roster_data = await get_team_round_roster(session, previous_round["id"], team_id)
                     message = await fmt_team_details(team_info, previous_round, roster_data)
                     message = "⚠️ <b>Mercado está aberto</b>; mostrando roster da rodada anterior e preços.\n\n" + message
-                    await update.message.reply_text(message, parse_mode="HTML")
+                    await update.message.reply_text(message, parse_mode="HTML", message_thread_id=thread_id)
                     return True
                 except Exception:
                     pass  # Fall through to normal error handling
@@ -378,30 +430,35 @@ async def _generic_team_lookup(update: Update, context: ContextTypes.DEFAULT_TYP
     """Unified handler for /team and /owner commands with market_open fallback."""
     if not await guard_read(update, context):
         return
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
     league, search_term = await _parse_lookup_params(update, context, mode)
     if not league:
         return
-    await _perform_lookup_and_reply(update, league, search_term, mode)
+    await _perform_lookup_and_reply(update, league, search_term, mode, thread_id)
 
 
 async def _parse_lookup_params(update: Update, context: ContextTypes.DEFAULT_TYPE, mode: str) -> Tuple[Optional[str], Optional[str]]:
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
+    
     if chat.type == "private":
         if len(context.args) < 2:
-            await update.message.reply_text(f"Usage: /{mode} <league_slug> <{mode}_name>")
+            await update.message.reply_text(f"Usage: /{mode} <league_slug> <{mode}_name>", message_thread_id=thread_id)
             return None, None
         return context.args[0].strip(), " ".join(context.args[1:]).strip()
     if not context.args:
-        await update.message.reply_text(f"Usage: /{mode} <{mode}_name>")
+        await update.message.reply_text(f"Usage: /{mode} <{mode}_name>", message_thread_id=thread_id)
         return None, None
-    league = get_group_league(chat.id)
+    league, _ = get_group_league(chat.id)
     if not league:
-        await update.message.reply_text(NO_LEAGUE_ATTACHED_MSG, parse_mode="HTML")
+        await update.message.reply_text(NO_LEAGUE_ATTACHED_MSG, parse_mode="HTML", message_thread_id=thread_id)
         return None, None
     return league, " ".join(context.args).strip()
 
 
-async def _perform_lookup_and_reply(update: Update, league: str, search_term: str, mode: str):
+async def _perform_lookup_and_reply(update: Update, league: str, search_term: str, mode: str, thread_id: Optional[int] = None):
     from .api import find_team_by_name_or_owner, get_team_round_roster
     from .formatting import fmt_team_details
     from .api import get_rounds, pick_previous_round
@@ -418,6 +475,7 @@ async def _perform_lookup_and_reply(update: Update, league: str, search_term: st
                 await update.message.reply_text(
                     f"❌ {noun} '<code>{search_term}</code>' not found in league '<code>{league}</code>'.",
                     parse_mode="HTML",
+                    message_thread_id=thread_id,
                 )
                 return
             team_info = result["team_info"]
@@ -444,18 +502,18 @@ async def _perform_lookup_and_reply(update: Update, league: str, search_term: st
                 message = await fmt_team_details(team_info, use_round_obj, roster_data)
                 if proactive_note:
                     message = proactive_note + message
-                await update.message.reply_text(message, parse_mode="HTML")
+                await update.message.reply_text(message, parse_mode="HTML", message_thread_id=thread_id)
             except PermissionError:
                 # As a safety net, attempt legacy fallback path
-                if await _handle_market_open_roster_fallback(session, league, search_term, mode, update):
+                if await _handle_market_open_roster_fallback(session, league, search_term, mode, update, thread_id):
                     return
                 raise
     except PermissionError as e:
         if update.message:
-            await update.message.reply_text(f"🔐 {e}")
+            await update.message.reply_text(f"🔐 {e}", message_thread_id=thread_id)
     except Exception as e:
         if update.message:
-            await update.message.reply_text(f"❌ Error: {e}")
+            await update.message.reply_text(f"❌ Error: {e}", message_thread_id=thread_id)
 
 
 async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -465,10 +523,12 @@ async def owner_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def watchstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Diagnostic command to report current watch state for this chat."""
     chat = update.effective_chat
+    msg = update.message
+    thread_id = getattr(msg, 'message_thread_id', None)
     chat_id = chat.id
     from .state import WATCHER_PHASES, STALE_COUNTERS, CURRENT_BACKOFF, REMINDER_SCHEDULES
     if chat_id not in WATCHER_PHASES:
-        await update.message.reply_text("ℹ️ Não há watcher ativo neste chat.")
+        await update.message.reply_text("ℹ️ Não há watcher ativo neste chat.", message_thread_id=thread_id)
         return
     phase = WATCHER_PHASES.get(chat_id)
     stale = STALE_COUNTERS.get(chat_id, 0)
@@ -491,4 +551,4 @@ async def watchstatus_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"Backoff: {backoff:.2f}x\n"
         f"Reminders: {reminder_summary}"
     )
-    await update.message.reply_text(msg, parse_mode="HTML")
+    await update.message.reply_text(msg, parse_mode="HTML", message_thread_id=thread_id)

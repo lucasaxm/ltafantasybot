@@ -313,30 +313,30 @@ def check_partial_ranking_changed(chat_id: int, current_partial_ranking: List[st
     return chat_id not in LAST_PARTIAL_RANKINGS or LAST_PARTIAL_RANKINGS[chat_id] != current_partial_ranking
 
 
-async def send_ranking_change_notification(bot, chat_id: int, league: str, current_round, teams_data):
+async def send_ranking_change_notification(bot, chat_id: int, league: str, current_round, teams_data, thread_id: Optional[int] = None):
     """Send ranking change notification."""
     ranking_msg = "🔄 <b>RANKING CHANGED!</b>\n\n"
     ranking_msg += fmt_standings(league, current_round, teams_data)
-    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
+    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML", message_thread_id=thread_id)
 
 
-async def send_split_ranking_change_notification(bot, chat_id: int, league: str, current_round, split_teams_data):
+async def send_split_ranking_change_notification(bot, chat_id: int, league: str, current_round, split_teams_data, thread_id: Optional[int] = None):
     """Send split ranking change notification."""
     ranking_msg = "🔄 <b>SPLIT RANKING CHANGED!</b>\n\n"
     ranking_msg += fmt_standings(league, current_round, split_teams_data, score_type="Split")
-    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
+    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML", message_thread_id=thread_id)
 
 
-async def send_partial_ranking_change_notification(bot, chat_id: int, league: str, partial_teams_data):
+async def send_partial_ranking_change_notification(bot, chat_id: int, league: str, partial_teams_data, thread_id: Optional[int] = None):
     """Send partial ranking change notification."""
     ranking_msg = "🔄 <b>RANKING CHANGED!</b>\n\n"
     # Create a fake round object for formatting
     fake_round = {"name": "Ranking Parcial", "status": "live"}
     ranking_msg += fmt_standings(league, fake_round, partial_teams_data, score_type="Parcial")
-    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML")
+    await bot.send_message(chat_id, ranking_msg, parse_mode="HTML", message_thread_id=thread_id)
 
 
-async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool):
+async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool, thread_id: Optional[int] = None):
     """Send new message or edit existing watch message."""
     # Check if message content has changed
     current_hash = hash_payload(message)
@@ -369,7 +369,7 @@ async def send_or_edit_message(bot, chat_id: int, message: str, force_new: bool)
     
     # Send new message
     try:
-        sent_message = await bot.send_message(chat_id, message, parse_mode="HTML")
+        sent_message = await bot.send_message(chat_id, message, parse_mode="HTML", message_thread_id=thread_id)
         WATCH_MESSAGE_IDS[chat_id] = sent_message.message_id
         LAST_SENT_HASH[chat_id] = current_hash
         logger.debug(f"Sent new message {sent_message.message_id} for chat {chat_id}")
@@ -578,7 +578,7 @@ def _start_market_close_polling(chat_id: int, league: str, bot):
     logger.info(f"Started market close polling task for {league} chat {chat_id}")
 
 
-def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, Any], bot):
+def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, Any], bot, thread_id: Optional[int] = None):
     """Schedule market close reminders based on marketClosesAt."""
     try:
         from datetime import datetime
@@ -625,7 +625,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                         "⏰ Lembrete: o mercado fecha em 24 horas ({})\n⚠️ Últimas 24h para fazer alterações no seu time!".format(
                             close_time.strftime("%Y-%m-%d %H:%M UTC")
                         ),
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     mark_reminder_sent(schedule, "reminder_24h")
                 
@@ -641,7 +642,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                         "⏰ Lembrete: o mercado fecha em 24 horas ({})\n⚠️ Últimas 24h para fazer alterações no seu time!".format(
                             close_time.strftime("%Y-%m-%d %H:%M UTC")
                         ),
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     mark_reminder_sent(schedule, "reminder_24h")
                 
@@ -661,7 +663,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                     await bot.send_message(
                         chat_id,
                         "⏰ Lembrete: o mercado fecha em 1 hora!\n🏃‍♂️ Última chance para fazer alterações no seu time!",
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     mark_reminder_sent(schedule, "reminder_1h")
                 
@@ -675,7 +678,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                     await bot.send_message(
                         chat_id,
                         "⏰ Lembrete: o mercado fecha em 1 hora!\n🏃‍♂️ Última chance para fazer alterações no seu time!",
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     mark_reminder_sent(schedule, "reminder_1h")
                 
@@ -695,7 +699,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                     await bot.send_message(
                         chat_id,
                         "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     mark_reminder_sent(schedule, "closed_transition")
                     # Start polling for actual API status change (non-blocking)
@@ -711,7 +716,8 @@ def schedule_market_reminders(chat_id: int, league: str, round_obj: Dict[str, An
                     await bot.send_message(
                         chat_id,
                         "▶️ Mercado fechado. Começamos a acompanhar os jogos ao vivo!",
-                        parse_mode="HTML"
+                        parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
                     mark_reminder_sent(schedule, "closed_transition")
                     # Start polling for actual API status change (non-blocking)
@@ -776,7 +782,7 @@ async def _collect_team_budget_data(session: aiohttp.ClientSession, league: str,
     return team_budget_data
 
 
-async def send_market_open_notification(chat_id: int, league: str, round_obj: Dict[str, Any], bot):
+async def send_market_open_notification(chat_id: int, league: str, round_obj: Dict[str, Any], bot, thread_id: Optional[int] = None):
     """Send market open notification with budget and price deltas."""
     try:
         async with make_session() as session:
@@ -785,7 +791,7 @@ async def send_market_open_notification(chat_id: int, league: str, round_obj: Di
             
             # Format and send the market open notification
             message = fmt_market_open_notification(round_obj, team_budget_data)
-            await bot.send_message(chat_id, message, parse_mode="HTML")
+            await bot.send_message(chat_id, message, parse_mode="HTML", message_thread_id=thread_id)
             
             logger.info(f"Sent market open notification for {league} to chat {chat_id}")
             
@@ -797,13 +803,14 @@ async def send_market_open_notification(chat_id: int, league: str, round_obj: Di
             await bot.send_message(
                 chat_id,
                 f"📣 <b>Mercado ABERTO!</b>\n🧭 Rodada: <b>{round_name}</b>\n\n💰 Boa sorte a todos os participantes!",
-                parse_mode="HTML"
+                parse_mode="HTML",
+                message_thread_id=thread_id,
             )
         except Exception:
             pass
 
 
-async def compute_and_send_split_ranking(chat_id: int, league: str, completed_round: Dict[str, Any], bot):
+async def compute_and_send_split_ranking(chat_id: int, league: str, completed_round: Dict[str, Any], bot, thread_id: Optional[int] = None):
     """Compute and send manual split ranking after round completion."""
     try:
         async with make_session() as session:
@@ -842,14 +849,14 @@ async def compute_and_send_split_ranking(chat_id: int, league: str, completed_ro
             # Format and send split ranking
             if split_totals:
                 split_message = fmt_manual_split_ranking(league, completed_round, split_totals)
-                await bot.send_message(chat_id, split_message, parse_mode="HTML")
+                await bot.send_message(chat_id, split_message, parse_mode="HTML", message_thread_id=thread_id)
                 logger.info(f"Sent manual split ranking for {league} to chat {chat_id}")
             
     except Exception as e:
         logger.error(f"Failed to compute split ranking for chat {chat_id}: {e}")
 
 
-async def handle_round_completion(chat_id: int, league: str, completed_round: Dict[str, Any], bot):
+async def handle_round_completion(chat_id: int, league: str, completed_round: Dict[str, Any], bot, thread_id: Optional[int] = None):
     """Handle round completion notifications and cleanup."""
     round_name = completed_round.get('name', 'unknown')
     round_id = completed_round.get('id', 'unknown')
@@ -879,17 +886,17 @@ async def handle_round_completion(chat_id: int, league: str, completed_round: Di
         # Send final round scores
         final_msg, _ = await gather_live_scores(league)
         final_msg += "\n\n🏁 <b>ROUND COMPLETED!</b>\n<i>Final scores above.</i>"
-        await bot.send_message(chat_id, final_msg, parse_mode="HTML")
+        await bot.send_message(chat_id, final_msg, parse_mode="HTML", message_thread_id=thread_id)
         
         # Compute and send split ranking
-        await compute_and_send_split_ranking(chat_id, league, completed_round, bot)
+        await compute_and_send_split_ranking(chat_id, league, completed_round, bot, thread_id)
         
     except Exception as e:
-        await bot.send_message(chat_id, f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}", parse_mode="HTML")
+        await bot.send_message(chat_id, f"🏁 <b>Round completed!</b> Stopped watching.\n❌ Could not fetch final scores: {e}", parse_mode="HTML", message_thread_id=thread_id)
 async def process_score_and_ranking_changes(chat_id: int, league: str, current_round, current_scores, 
                                           current_split_ranking, split_teams_data, teams_data, 
                                           current_partial_ranking, partial_teams_data,
-                                          is_resumed: bool, bot):
+                                          is_resumed: bool, bot, thread_id: Optional[int] = None):
     """Process score changes and ranking changes, send notifications."""
     score_changes = calculate_score_changes(chat_id, current_scores) if not is_resumed else {}
     split_ranking_changed = check_split_ranking_changed(chat_id, current_split_ranking)
@@ -908,15 +915,15 @@ async def process_score_and_ranking_changes(chat_id: int, league: str, current_r
     
     # Use partial ranking change as the primary trigger for ranking change notifications during live phase
     if partial_ranking_changed and chat_id in LAST_PARTIAL_RANKINGS and not is_resumed:
-        await send_partial_ranking_change_notification(bot, chat_id, league, partial_teams_data)
+        await send_partial_ranking_change_notification(bot, chat_id, league, partial_teams_data, thread_id)
     
     # Still send split ranking notifications, but these are less frequent
     if split_ranking_changed and chat_id in LAST_SPLIT_RANKINGS and not is_resumed:
-        await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data)
+        await send_split_ranking_change_notification(bot, chat_id, league, current_round, split_teams_data, thread_id)
     
     # Force new message if ranking changed to ensure visibility
     force_new = (partial_ranking_changed or split_ranking_changed) and not is_resumed
-    await send_or_edit_message(bot, chat_id, message, force_new)
+    await send_or_edit_message(bot, chat_id, message, force_new, thread_id)
     
     return score_changes, partial_ranking_changed, split_ranking_changed
 
@@ -938,7 +945,7 @@ def cleanup_watch_session(chat_id: int):
     write_runtime_state(list(WATCHERS.keys()))
 
 
-async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[WatcherPhase]:
+async def _handle_pre_market_phase(chat_id: int, league: str, bot, thread_id: Optional[int] = None) -> Optional[WatcherPhase]:
     """Handle PRE_MARKET phase logic. Returns new phase if transition occurs."""
     async with make_session() as session:
         rounds = await get_rounds(session, league)
@@ -958,7 +965,7 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
         flags = schedule.get("flags", {})
         
         if not flags.get("market_open_sent", False):
-            await send_market_open_notification(chat_id, league, latest_round, bot)
+            await send_market_open_notification(chat_id, league, latest_round, bot, thread_id)
             # Mark as sent in the schedule
             if reminder_key not in REMINDER_SCHEDULES[chat_id]:
                 from .reminder_utils import create_reminder_schedule
@@ -979,7 +986,7 @@ async def _handle_pre_market_phase(chat_id: int, league: str, bot) -> Optional[W
                 REMINDER_SCHEDULES[chat_id][reminder_key]["flags"]["market_open_sent"] = True
         
         # Schedule reminders
-        schedule_market_reminders(chat_id, league, latest_round, bot)
+        schedule_market_reminders(chat_id, league, latest_round, bot, thread_id)
         
         logger.info(f"Transitioned to MARKET_OPEN for chat {chat_id}")
         try:
@@ -1003,14 +1010,14 @@ def _handle_market_open_phase() -> Optional[WatcherPhase]:
     return None
 
 
-async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, save_counter: int) -> Tuple[Optional[WatcherPhase], int]:
+async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, save_counter: int, thread_id: Optional[int] = None) -> Tuple[Optional[WatcherPhase], int]:
     """Handle LIVE phase logic. Returns new phase if transition occurs and updated save counter."""
     current_scores, current_ranking, teams_data, current_round = await get_structured_scores(league)
     
     # Check for transition to completed FIRST - before other checks
     if current_round and current_round.get("status") == "completed":
         logger.info(f"🔄 COMPLETION DETECTED: Round {current_round.get('name', 'unknown')} status is completed for chat {chat_id}")
-        await handle_round_completion(chat_id, league, current_round, bot)
+        await handle_round_completion(chat_id, league, current_round, bot, thread_id)
         # Transition back to PRE_MARKET
         initialize_phase_state(chat_id, WatcherPhase.PRE_MARKET)
         logger.info(f"Round completed, transitioned to PRE_MARKET for chat {chat_id}")
@@ -1024,7 +1031,7 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
     if not current_round or (current_round.get("status") != "in_progress" and current_round.get("status") != "completed"):
         round_status = current_round.get('status', 'unknown') if current_round else 'no_round'
         round_name = current_round.get('name', 'Unknown Round') if current_round else 'No Round'
-        await bot.send_message(chat_id, f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.", parse_mode="HTML")
+        await bot.send_message(chat_id, f"❌ <b>Unknown round state:</b> <code>{round_name}</code> status is <code>{round_status}</code> (not in_progress).\nStopped watching.", parse_mode="HTML", message_thread_id=thread_id)
         return None, save_counter  # Error, exit watch loop
     
     # Check if we have no teams data but round is in progress (shouldn't happen normally)
@@ -1046,7 +1053,7 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
         # Process changes and send notifications
         score_changes, partial_ranking_changed, split_ranking_changed = await process_score_and_ranking_changes(
             chat_id, league, current_round, current_scores, current_split_ranking, split_teams_data, teams_data, 
-            current_partial_ranking, partial_teams_data, is_resumed, bot
+            current_partial_ranking, partial_teams_data, is_resumed, bot, thread_id
         )
 
         # Update tracking data
@@ -1081,7 +1088,7 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
             # Send recovery notification before new live message
             recovery_msg = "✅ <b>Placar AO VIVO voltou!</b> Novas atualizações detectadas."
             try:
-                await bot.send_message(chat_id, recovery_msg, parse_mode="HTML")
+                await bot.send_message(chat_id, recovery_msg, parse_mode="HTML", message_thread_id=thread_id)
                 logger.info(f"Sent recovery notification to chat {chat_id}")
             except Exception as e:
                 logger.error(f"Failed to send recovery notification to chat {chat_id}: {e}")
@@ -1111,10 +1118,10 @@ async def _handle_live_phase(chat_id: int, league: str, bot, is_resumed: bool, s
 
 
 async def _execute_phase_logic(current_phase: WatcherPhase, chat_id: int, league: str, bot, 
-                              is_resumed: bool, save_counter: int) -> Tuple[Optional[WatcherPhase], int]:
+                              is_resumed: bool, save_counter: int, thread_id: Optional[int] = None) -> Tuple[Optional[WatcherPhase], int]:
     """Execute phase-specific logic. Returns new phase (if changed) and save counter."""
     if current_phase == WatcherPhase.PRE_MARKET:
-        new_phase = await _handle_pre_market_phase(chat_id, league, bot)
+        new_phase = await _handle_pre_market_phase(chat_id, league, bot, thread_id)
         return new_phase, save_counter
         
     elif current_phase == WatcherPhase.MARKET_OPEN:
@@ -1122,19 +1129,19 @@ async def _execute_phase_logic(current_phase: WatcherPhase, chat_id: int, league
         return new_phase, save_counter
         
     elif current_phase == WatcherPhase.LIVE:
-        return await _handle_live_phase(chat_id, league, bot, is_resumed, save_counter)
+        return await _handle_live_phase(chat_id, league, bot, is_resumed, save_counter, thread_id)
     
     return None, save_counter
 
 
 async def _main_loop_iteration(current_phase: WatcherPhase, chat_id: int, league: str, bot, 
-                              is_resumed: bool, save_counter: int) -> Tuple[Optional[WatcherPhase], int, bool]:
+                              is_resumed: bool, save_counter: int, thread_id: Optional[int] = None) -> Tuple[Optional[WatcherPhase], int, bool]:
     """Execute one iteration of the main loop. Returns (new_phase, save_counter, should_break)."""
     logger.debug(f"🔄 Main loop iteration: chat {chat_id}, phase {current_phase.value}, save_counter {save_counter}")
     
     # Execute phase-specific logic
     new_phase, save_counter = await _execute_phase_logic(
-        current_phase, chat_id, league, bot, is_resumed, save_counter
+        current_phase, chat_id, league, bot, is_resumed, save_counter, thread_id
     )
     
     if new_phase == None and save_counter == -1:  # Error condition
@@ -1149,7 +1156,7 @@ async def _main_loop_iteration(current_phase: WatcherPhase, chat_id: int, league
     return current_phase, save_counter, False
 
 
-async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
+async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event, thread_id: Optional[int] = None):
     """Main stateful watch loop with phase-based polling."""
     logger.info(f"Started stateful watch loop for chat {chat_id}, league '{league}'")
     save_counter = 0
@@ -1197,7 +1204,7 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
             flags = schedule.get("flags", {})
             
             if not flags.get("market_open_sent", False):
-                await send_market_open_notification(chat_id, league, latest_round, bot)
+                await send_market_open_notification(chat_id, league, latest_round, bot, thread_id)
                 # Ensure the structure exists before setting the flag
                 if "flags" not in REMINDER_SCHEDULES[chat_id][reminder_key]:
                     REMINDER_SCHEDULES[chat_id][reminder_key]["flags"] = {
@@ -1209,7 +1216,7 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
                 REMINDER_SCHEDULES[chat_id][reminder_key]["flags"]["market_open_sent"] = True
             
             # Schedule market reminders
-            schedule_market_reminders(chat_id, league, latest_round, bot)
+            schedule_market_reminders(chat_id, league, latest_round, bot, thread_id)
             try:
                 write_runtime_state(list(WATCHERS.keys()))
             except Exception:
@@ -1232,7 +1239,7 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
                     current_phase = global_phase
                 
                 current_phase, save_counter, should_break = await _main_loop_iteration(
-                    current_phase, chat_id, league, bot, is_resumed, save_counter
+                    current_phase, chat_id, league, bot, is_resumed, save_counter, thread_id
                 )
                 
                 if should_break:
@@ -1244,11 +1251,11 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event):
                     is_resumed = False
 
             except PermissionError as e:
-                await bot.send_message(chat_id, f"🔐 {e}")
+                await bot.send_message(chat_id, f"🔐 {e}", message_thread_id=thread_id)
                 break
             except Exception as e:
                 logger.error(f"Watch error for chat {chat_id}: {e}")
-                await bot.send_message(chat_id, f"❌ Watch error: {e}")
+                await bot.send_message(chat_id, f"❌ Watch error: {e}", message_thread_id=thread_id)
 
             # Wait for next poll or stop event
             poll_interval = get_phase_poll_interval(current_phase, chat_id)
@@ -1287,12 +1294,16 @@ def start_watcher(chat_id: int, league: str, bot):
     """Start the stateful watcher for a chat/league."""
     if chat_id in WATCHERS:
         return  # Already running
+    
+    # Get thread_id from storage for forum groups
+    from .storage import get_group_thread_id
+    thread_id = get_group_thread_id(chat_id)
         
     stop_event = asyncio.Event()
     
     async def runner():
-        await watch_loop(chat_id, league, bot, stop_event)
+        await watch_loop(chat_id, league, bot, stop_event, thread_id)
     
     WATCHERS[chat_id] = asyncio.create_task(runner())
-    logger.info(f"Started watcher for chat {chat_id}, league '{league}'")
+    logger.info(f"Started watcher for chat {chat_id}, league '{league}', topic {thread_id}")
 
