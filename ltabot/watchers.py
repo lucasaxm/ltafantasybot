@@ -52,6 +52,8 @@ from .state import (
     LAST_SCORE_CHANGE_AT,
     IS_STALE,
     NO_CHANGE_POLLS,
+    ERROR_COUNTS,
+    LAST_ERROR_NOTIFICATION,
 )
 from .storage import write_runtime_state
 
@@ -1242,6 +1244,11 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event, 
                     current_phase, chat_id, league, bot, is_resumed, save_counter, thread_id
                 )
                 
+                # Reset error counter on successful iteration
+                if chat_id in ERROR_COUNTS and ERROR_COUNTS[chat_id] > 0:
+                    logger.info(f"✅ Recovery successful for chat {chat_id} after {ERROR_COUNTS[chat_id]} errors")
+                    ERROR_COUNTS[chat_id] = 0
+                
                 if should_break:
                     break
                 
@@ -1254,8 +1261,26 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event, 
                 await bot.send_message(chat_id, f"🔐 {e}", message_thread_id=thread_id)
                 break
             except Exception as e:
-                logger.error(f"Watch error for chat {chat_id}: {e}")
-                await bot.send_message(chat_id, f"❌ Watch error: {e}", message_thread_id=thread_id)
+                # Track consecutive errors
+                ERROR_COUNTS[chat_id] = ERROR_COUNTS.get(chat_id, 0) + 1
+                error_count = ERROR_COUNTS[chat_id]
+                
+                logger.error(f"Watch error for chat {chat_id} (error #{error_count}): {e}")
+                
+                # Only notify users after 3 consecutive errors, and max once per 10 minutes
+                import time
+                current_time = time.time()
+                last_notification = LAST_ERROR_NOTIFICATION.get(chat_id, 0)
+                time_since_last = current_time - last_notification
+                
+                if error_count >= 3 and time_since_last > 600:  # 10 minutes
+                    await bot.send_message(
+                        chat_id, 
+                        f"⚠️ API temporarily unstable ({error_count} consecutive errors). Continuing to retry...",
+                        message_thread_id=thread_id
+                    )
+                    LAST_ERROR_NOTIFICATION[chat_id] = current_time
+                # Otherwise, just log and continue silently
 
             # Wait for next poll or stop event
             poll_interval = get_phase_poll_interval(current_phase, chat_id)

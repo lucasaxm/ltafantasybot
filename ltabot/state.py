@@ -34,6 +34,10 @@ LAST_SCORE_CHANGE_AT: Dict[int, str] = {}
 IS_STALE: Dict[int, bool] = {}
 NO_CHANGE_POLLS: Dict[int, int] = {}
 
+# Error tracking to prevent spam
+ERROR_COUNTS: Dict[int, int] = {}  # chat_id -> consecutive error count
+LAST_ERROR_NOTIFICATION: Dict[int, float] = {}  # chat_id -> timestamp of last error message sent
+
 # Phase change events to wake up main loops from scheduled tasks
 PHASE_CHANGE_EVENTS: Dict[int, asyncio.Event] = {}
 
