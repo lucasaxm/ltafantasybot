@@ -482,16 +482,21 @@ async def _perform_lookup_and_reply(update: Update, league: str, search_term: st
             base_round_obj = result["round_obj"]
             team_id = team_info["userTeam"]["id"]
 
-            # Proactive previous-round selection during market_open before any roster fetch
+            # Proactive previous-round selection during market_open or upcoming before any roster fetch
             use_round_obj = base_round_obj
             proactive_note = ""
-            if base_round_obj.get("status") == "market_open":
+            base_status = base_round_obj.get("status")
+            
+            if base_status in ["market_open", "upcoming"]:
                 try:
                     rounds = await get_rounds(session, league)
                     previous_round = pick_previous_round(rounds, base_round_obj)
                     if previous_round:
                         use_round_obj = previous_round
-                        proactive_note = "⚠️ <b>Mercado aberto</b>; mostrando roster da rodada anterior.\n\n"
+                        if base_status == "market_open":
+                            proactive_note = "⚠️ <b>Mercado aberto</b>; mostrando roster da rodada anterior.\n\n"
+                        else:  # upcoming
+                            proactive_note = "⚠️ <b>Rodada ainda não iniciada</b>; mostrando roster da rodada anterior.\n\n"
                 except Exception:
                     pass  # Fall back silently
 

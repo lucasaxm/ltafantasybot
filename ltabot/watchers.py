@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from datetime import datetime, timezone, timedelta
 from typing import Any, Dict, List, Tuple, Optional
 
@@ -10,6 +11,8 @@ from .config import (
     POLL_SECS,
     MAX_STALE_POLLS,
     BACKOFF_MULTIPLIER,
+    ERROR_NOTIFICATION_THRESHOLD,
+    ERROR_NOTIFICATION_COOLDOWN_SECONDS,
     MAX_POLL_SECS,
     logger,
 )
@@ -1267,13 +1270,12 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event, 
                 
                 logger.error(f"Watch error for chat {chat_id} (error #{error_count}): {e}")
                 
-                # Only notify users after 3 consecutive errors, and max once per 10 minutes
-                import time
+                # Only notify users after threshold consecutive errors, with cooldown between notifications
                 current_time = time.time()
                 last_notification = LAST_ERROR_NOTIFICATION.get(chat_id, 0)
                 time_since_last = current_time - last_notification
                 
-                if error_count >= 3 and time_since_last > 600:  # 10 minutes
+                if error_count >= ERROR_NOTIFICATION_THRESHOLD and time_since_last > ERROR_NOTIFICATION_COOLDOWN_SECONDS:
                     await bot.send_message(
                         chat_id, 
                         f"⚠️ API temporarily unstable ({error_count} consecutive errors). Continuing to retry...",

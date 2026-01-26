@@ -74,6 +74,10 @@ class Config:
     MAX_STALE_POLLS: int = int(os.getenv("MAX_STALE_POLLS", "12"))
     BACKOFF_MULTIPLIER: float = float(os.getenv("BACKOFF_MULTIPLIER", "2.0"))
     MAX_POLL_SECS: int = int(os.getenv("MAX_POLL_SECS", "900"))
+    
+    # Error handling configuration
+    ERROR_NOTIFICATION_THRESHOLD: int = int(os.getenv("ERROR_NOTIFICATION_THRESHOLD", "3"))  # Notify after N consecutive errors
+    ERROR_NOTIFICATION_COOLDOWN_SECONDS: int = int(os.getenv("ERROR_NOTIFICATION_COOLDOWN_SECONDS", "600"))  # Min 10 minutes between notifications
 
     # API Endpoint Configuration
     LTA_API_URL: str = os.getenv("LTA_API_URL", "https://api.cblol.gg").strip()
@@ -98,6 +102,8 @@ config = Config()
 config.validate_config()
 BASE = config.get_api_base_url()
 BOT_TOKEN = config.BOT_TOKEN
+ERROR_NOTIFICATION_THRESHOLD = config.ERROR_NOTIFICATION_THRESHOLD
+ERROR_NOTIFICATION_COOLDOWN_SECONDS = config.ERROR_NOTIFICATION_COOLDOWN_SECONDS
 ALLOWED_USER_ID = config.ALLOWED_USER_ID
 X_SESSION_TOKEN = config.X_SESSION_TOKEN
 USER_TEAM_ID = config.USER_TEAM_ID

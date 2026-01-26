@@ -86,6 +86,3 @@ async def fetch_json(session: aiohttp.ClientSession, url: str, params: Dict[str,
             else:
                 logger.error(f"Network error for {url} after {max_retries} attempts: {e}")
                 raise RuntimeError(f"Network error for {url}: {e}")
-    
-    # Should never reach here, but just in case
-    raise RuntimeError(f"Failed to fetch {url} after {max_retries} attempts")
