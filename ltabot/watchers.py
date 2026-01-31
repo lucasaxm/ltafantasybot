@@ -210,17 +210,30 @@ async def calculate_partial_ranking_optimized(league: str) -> Tuple[List[str], L
                         if score is not None:
                             total_score += float(score)
                         elif round_status == "in_progress":
-                            # Get live score for in_progress round
-                            try:
-                                round_id = round_stat["id"]
-                                roster = await get_team_round_roster(session, round_id, team_id)
-                                rr = roster.get("roundRoster") or {}
-                                live_pts = rr.get("pointsPartial")
-                                if live_pts is None:
-                                    live_pts = rr.get("points") or 0.0
-                                total_score += float(live_pts)
-                            except Exception as e:
-                                logger.warning(f"Could not get live score for team {team_name} in round {round_id}: {e}")
+                            # Try to get live score from pointsPartial first (more stable)
+                            # Fall back to roster fetch only if needed
+                            round_id = round_stat["id"]
+                            live_score_found = False
+                            
+                            # Option 1: Check if round_stat itself has pointsPartial
+                            if "pointsPartial" in round_stat and round_stat["pointsPartial"] is not None:
+                                total_score += float(round_stat["pointsPartial"])
+                                live_score_found = True
+                            
+                            # Option 2: Fall back to roster fetch (may fail during game transitions)
+                            if not live_score_found:
+                                try:
+                                    roster = await get_team_round_roster(session, round_id, team_id)
+                                    rr = roster.get("roundRoster") or {}
+                                    live_pts = rr.get("pointsPartial")
+                                    if live_pts is None:
+                                        live_pts = rr.get("points") or 0.0
+                                    total_score += float(live_pts)
+                                except Exception as e:
+                                    # During game transitions, roster API may be temporarily unavailable
+                                    # This is NOT a fatal error - just log and continue with 0 for this round
+                                    logger.debug(f"Roster API unavailable for team {team_name} in round {round_id} (likely game transition): {e}")
+                                    # Add 0 for now - will update on next successful poll
                 
                 team_totals[team_name] = total_score
                 team_owners[team_name] = owner_name
@@ -1282,7 +1295,18 @@ async def watch_loop(chat_id: int, league: str, bot, stop_event: asyncio.Event, 
                         message_thread_id=thread_id
                     )
                     LAST_ERROR_NOTIFICATION[chat_id] = current_time
-                # Otherwise, just log and continue silently
+                
+                # Don't break the loop - wait and retry with backoff
+                # Use POLL_SECS as base interval for error recovery
+                error_backoff = min(POLL_SECS * (1.5 ** min(error_count - 1, 5)), MAX_POLL_SECS)
+                logger.debug(f"Error recovery: waiting {error_backoff}s before retry")
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=error_backoff)
+                    # If stop_event was set, exit the loop
+                    break
+                except asyncio.TimeoutError:
+                    # Timeout means we should retry - continue to next iteration
+                    continue
 
             # Wait for next poll or stop event
             poll_interval = get_phase_poll_interval(current_phase, chat_id)

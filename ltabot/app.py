@@ -120,7 +120,8 @@ def main():
         if not chats_to_resume:
             return
         for chat_id in chats_to_resume:
-            league = get_group_league(chat_id)
+            # get_group_league returns (league_slug, message_thread_id)
+            league, _ = get_group_league(chat_id)
             if not league:
                 continue
             # Use the new state machine watcher

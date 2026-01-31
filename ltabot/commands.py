@@ -414,7 +414,7 @@ async def _get_team_command_params(update: Update, context: ContextTypes.DEFAULT
         if not context.args:
             await update.message.reply_text("Usage: /team <team_name>")
             return None
-        league = get_group_league(chat.id)
+        league, _ = get_group_league(chat.id)
         if not league:
             await update.message.reply_text(NO_LEAGUE_ATTACHED_MSG, parse_mode="HTML")
             return None
